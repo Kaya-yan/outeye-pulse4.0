@@ -17,7 +17,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main
         className={cn(
           'pt-14 min-h-screen transition-all duration-300',
-          presentationMode ? 'pl-6' : sidebarCollapsed ? 'pl-16' : 'pl-52'
+          presentationMode ? 'pl-6' : sidebarCollapsed ? 'md:pl-16' : 'md:pl-52'
         )}
       >
         <div className={cn('p-6', presentationMode && 'max-w-[1400px] mx-auto')}>

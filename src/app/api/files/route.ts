@@ -39,6 +39,10 @@ function scanDir(dir: string, platform: 'xhs' | 'bilibili', source: 'mediacrawle
 }
 
 export async function GET() {
+  if (process.env.VERCEL) {
+    return NextResponse.json({ files: [], isCloud: true, message: '云端环境无法扫描本地文件，请在本地运行' });
+  }
+
   const cwd = process.cwd();
   const files: CsvFile[] = [];
 

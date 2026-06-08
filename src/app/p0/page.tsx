@@ -1,16 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { generateDemoProject, computeDemoStats } from '@/lib/demo-data';
-import { fetchProjects, fetchPosts, fetchComments, createProject, createPost, batchInsertPosts, batchInsertComments, fetchPendingRawComments, linkRawComments, ignoreRawComments, insertRawComments, fetchLocalLogs } from '@/lib/supabase-service';
-import type { RawComment } from '@/lib/supabase-service';
-import { fetchVideoInfo, fetchVideoReplies, extractBvid } from '@/lib/bilibili-api';
+import { fetchProjects, fetchPosts, fetchComments, createProject, createPost, fetchLocalLogs } from '@/lib/supabase-service';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
-import { BOOKMARKLET_URL, getConsoleScript } from '@/lib/bookmarklet-code';
 import { generateConfigSnippet, generateCommand, type CrawlerConfig } from '@/lib/media-crawler';
 import type { LocalLog } from '@/types';
-import Papa from 'papaparse';
 
 // ─── Env status types ───────────────────────────────────────────
 interface EnvStatus {
@@ -23,6 +19,7 @@ interface EnvStatus {
   dataDir: boolean;
   toolsDir: string;
   allReady: boolean;
+  isCloud?: boolean;
 }
 
 interface CsvFile {
@@ -51,7 +48,7 @@ function PlaywrightFaq() {
       {open && (
         <div className="mt-3 space-y-3 ml-5">
           {[
-            { q: 'Cookie 过期了怎么办？', a: 'B站：删除 scripts/playwright-scraper/cookies.json，重新运行命令，浏览器打开后登录即可自动更新。小红书：同样删除 cookies.json 后运行 --login 重新扫码。' },
+            { q: 'Cookie 过期了怎么办？', a: 'B站：删除 scripts/playwright-scraper/cookies-bilibili.json，重新运行命令，浏览器打开后登录即可自动更新。小红书：删除 cookies-xhs.json 后运行 --login 重新扫码。' },
             { q: '提示 HTTP 412 或限流', a: 'B站反爬机制触发。脚本会自动重试（最多3次，指数退避）。如果仍然失败，已采集的数据会自动保存到 _partial.csv 文件，不会丢失。等待 30 分钟后重试。' },
             { q: '采集过程中按了 Ctrl+C，数据会丢失吗？', a: '不会。脚本捕获 Ctrl+C 信号，会自动将已采集的数据保存到 output/ 目录下的 _partial.csv 文件。' },
             { q: '小红书采集失败，提示选择器失效', a: '小红书脚本使用 API 拦截方式（不依赖 DOM 选择器），但小红书 API 可能更新。如果 API 拦截失败，脚本会自动降级到 DOM 提取。如果两种方式都失败，请检查 Cookie 是否有效（运行 --login 重新登录）。' },
@@ -68,6 +65,29 @@ function PlaywrightFaq() {
   );
 }
 
+const SectionCard = ({ id, title, subtitle, children, defaultOpen = true, expandedSections, toggleSection }: { id: string; title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean; expandedSections: Record<string, boolean>; toggleSection: (key: string) => void }) => {
+  const isOpen = expandedSections[id] ?? defaultOpen;
+  return (
+    <div className="glass-card p-6 animate-fade-in">
+      <button onClick={() => toggleSection(id)} className="flex items-center justify-between w-full text-left mb-0">
+        <div>
+          <h2 className="text-lg font-semibold text-[#F8FAFC]">{title}</h2>
+          {subtitle && <p className="text-xs text-[#64748B] mt-0.5">{subtitle}</p>}
+        </div>
+        <svg className={`w-5 h-5 text-[#64748B] transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+      </button>
+      {isOpen && <div className="mt-4">{children}</div>}
+    </div>
+  );
+};
+
+const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
+  <div className="flex items-center gap-2">
+    <span className={`w-2.5 h-2.5 rounded-full ${ok ? 'bg-[#10B981]' : 'bg-[#EF4444]'}`} />
+    <span className={`text-sm ${ok ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>{label}</span>
+  </div>
+);
+
 export default function P0Page() {
   const { currentProject, setCurrentProject, setPosts, setComments, posts, comments, projects, addProject, setProjects } = useAppStore();
 
@@ -75,7 +95,7 @@ export default function P0Page() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 4000);
+    const timer = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -96,15 +116,8 @@ export default function P0Page() {
     files: true,
     import: true,
     guide: false,
-    // deprecated
-    oldProject: false,
-    oldCollect: false,
-    oldBookmarklet: false,
-    oldPending: false,
-    oldCsv: false,
-    oldExport: false,
   });
-  const toggleSection = (key: string) => setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+  const toggleSection = useCallback((key: string) => setExpandedSections(prev => ({ ...prev, [key]: !prev[key] })), []);
 
   // ─── Env detection ────────────────────────────────────────────
   const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
@@ -161,58 +174,22 @@ export default function P0Page() {
   const [localLogs, setLocalLogs] = useState<LocalLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
 
-  // ─── Deprecated section states ────────────────────────────────
+  // ─── Page loading state ──────────────────────────────────────
+  const [pageLoading, setPageLoading] = useState(true);
+
+  // ─── Section states ───────────────────────────────────────────
   const [demoLoaded, setDemoLoaded] = useState(false);
-  const [showTour, setShowTour] = useState(false);
-  const [tourStep, setTourStep] = useState(0);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectKeyword, setNewProjectKeyword] = useState('');
-  const [bilibiliUrl, setBilibiliUrl] = useState('');
-  const [collecting, setCollecting] = useState(false);
-  const [collectProgress, setCollectProgress] = useState('');
-  const [pendingRaw, setPendingRaw] = useState<RawComment[]>([]);
-  const [pendingLoading, setPendingLoading] = useState(false);
-  const [showLinkDialog, setShowLinkDialog] = useState(false);
-  const [linkTarget, setLinkTarget] = useState<{ sourceId: string; platform: string } | null>(null);
-  const [linkPostId, setLinkPostId] = useState('');
-  const [pastedJson, setPastedJson] = useState('');
-  const [cleaningStats, setCleaningStats] = useState<{ total: number; valid: number; empty: number; ad: number; irrelevant: number } | null>(null);
+  const [importNewPostTitle, setImportNewPostTitle] = useState('');
 
   // ─── Mount ────────────────────────────────────────────────────
-  useEffect(() => {
-    checkEnv();
-    scanFiles();
-    loadLocalLogs();
-    loadFromSupabase();
-  }, []);
-
-  const loadLocalLogs = async () => {
+  const loadLocalLogs = useCallback(async () => {
     setLogsLoading(true);
     const data = await fetchLocalLogs(20);
     setLocalLogs(data);
     setLogsLoading(false);
-  };
+  }, []);
 
-  const loadFromSupabase = async () => {
-    const projects = await fetchProjects();
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const validProjects = projects.filter(p => uuidRegex.test(p.id));
-    if (validProjects.length > 0) {
-      setProjects(validProjects);
-      const project = validProjects[0];
-      setCurrentProject(project);
-      const postsData = await fetchPosts(project.id);
-      setPosts(postsData);
-      const commentsData = await fetchComments(project.id);
-      setComments(commentsData);
-      calculateCleaningStats(commentsData);
-      if (!pendingRaw.length) loadPendingRawComments();
-    } else if (!demoLoaded) {
-      loadDemoProject();
-    }
-  };
-
-  const loadDemoProject = async () => {
+  const loadDemoProject = useCallback(async () => {
     const realProject = await createProject({
       name: '郭永怀数字记忆监测 Demo',
       keyword: '郭永怀',
@@ -225,21 +202,28 @@ export default function P0Page() {
     setPosts(posts);
     setComments(comments);
     setDemoLoaded(true);
-    calculateCleaningStats(comments);
-  };
+  }, [addProject, setCurrentProject, setPosts, setComments]);
 
-  const calculateCleaningStats = (commentsData: typeof comments) => {
-    const empty = commentsData.filter(c => c.is_empty).length;
-    const ad = commentsData.filter(c => c.is_ad).length;
-    const irrelevant = commentsData.filter(c => c.is_irrelevant).length;
-    setCleaningStats({ total: commentsData.length, valid: commentsData.length - empty - ad - irrelevant, empty, ad, irrelevant });
-  };
+  const loadFromSupabase = useCallback(async () => {
+    const projects = await fetchProjects();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const validProjects = projects.filter(p => uuidRegex.test(p.id));
+    if (validProjects.length > 0) {
+      setProjects(validProjects);
+      const project = validProjects[0];
+      setCurrentProject(project);
+      const postsData = await fetchPosts(project.id);
+      setPosts(postsData);
+      const commentsData = await fetchComments(project.id);
+      setComments(commentsData);
+    } else if (!demoLoaded) {
+      loadDemoProject();
+    }
+  }, [demoLoaded, loadDemoProject, setProjects, setCurrentProject, setPosts, setComments]);
 
-  const loadPendingRawComments = async () => {
-    setPendingLoading(true);
-    setPendingRaw(await fetchPendingRawComments());
-    setPendingLoading(false);
-  };
+  useEffect(() => {
+    Promise.allSettled([checkEnv(), scanFiles(), loadLocalLogs(), loadFromSupabase()]).then(() => setPageLoading(false));
+  }, []);
 
   // ─── Import handlers ──────────────────────────────────────────
   const handlePreview = async (file: CsvFile) => {
@@ -263,13 +247,33 @@ export default function P0Page() {
   };
 
   const handleImport = async () => {
-    if (!selectedFile || !importPostId || !currentProject) return;
+    if (!selectedFile || !currentProject) return;
+
+    let postId = importPostId;
+
+    // Auto-create post if none selected and user provided a title
+    if (!postId && importNewPostTitle.trim()) {
+      const platform = selectedFile.platform;
+      const newPost = await createPost({
+        project_id: currentProject.id,
+        platform,
+        title: importNewPostTitle.trim(),
+        collected_by: 'import',
+        is_aigc: false,
+      });
+      if (!newPost) { setToast({ type: 'error', message: '创建帖子失败' }); return; }
+      postId = newPost.id;
+      await loadFromSupabase();
+    }
+
+    if (!postId) { setToast({ type: 'error', message: '请选择帖子或输入帖子标题' }); return; }
+
     setImporting(true);
     try {
       const res = await fetch('/api/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: selectedFile.path, postId: importPostId, projectId: currentProject.id }),
+        body: JSON.stringify({ filePath: selectedFile.path, postId, projectId: currentProject.id }),
       });
       const data = await res.json();
       if (data.error) { setToast({ type: 'error', message: data.error }); return; }
@@ -277,6 +281,7 @@ export default function P0Page() {
       setImportPreview(null);
       setSelectedFile(null);
       setImportPostId('');
+      setImportNewPostTitle('');
       await scanFiles();
       await loadLocalLogs();
       await loadFromSupabase();
@@ -287,120 +292,33 @@ export default function P0Page() {
     }
   };
 
-  // ─── Deprecated handlers (kept for backward compat) ───────────
-  const createNewProject = async () => {
-    if (!newProjectName || !newProjectKeyword) return;
-    const project = await createProject({ name: newProjectName, keyword: newProjectKeyword, description: `基于"${newProjectKeyword}"主题的数字记忆传播监测项目` });
-    if (project) { addProject(project); setCurrentProject(project); setNewProjectName(''); setNewProjectKeyword(''); }
-  };
-
-  const collectBilibiliData = async () => {
-    if (!bilibiliUrl || !currentProject) return;
-    const bvid = extractBvid(bilibiliUrl);
-    if (!bvid) { setToast({ type: 'error', message: '请输入有效的B站视频链接或BV号' }); return; }
-    setCollecting(true);
-    setCollectProgress('正在获取视频信息...');
-    try {
-      const video = await fetchVideoInfo(bvid);
-      if (!video) { setToast({ type: 'error', message: '获取视频信息失败' }); setCollecting(false); return; }
-      const post = await createPost({ project_id: currentProject.id, platform: 'bilibili', title: video.title, content: video.desc, author_id_hash: `bili_${video.owner.mid}`, author_name_mask: `${video.owner.name.slice(0, 2)}***`, likes: video.stat.like, comments_count: video.stat.reply, shares: video.stat.share, is_aigc: false, url: `https://www.bilibili.com/video/${bvid}`, publish_time: new Date(video.pubdate * 1000).toISOString(), collected_by: 'api' });
-      if (!post) { setToast({ type: 'error', message: '创建帖子记录失败' }); setCollecting(false); return; }
-      const hotResult = await fetchVideoReplies(bvid, '0', '3');
-      const allRepliesMap = new Map<number, any>();
-      for (const reply of hotResult.replies) allRepliesMap.set(reply.rpid, reply);
-      const allReplies = Array.from(allRepliesMap.values());
-      const commentsToInsert = allReplies.map(reply => ({ post_id: post.id, project_id: currentProject.id, text: reply.content?.message || '', likes: reply.like, sampling_tier: reply.like >= 100 ? 'high' as const : reply.like >= 10 ? 'mid' as const : 'low' as const, is_sampled: reply.like >= 100 || Math.random() < 0.5 }));
-      const inserted = await batchInsertComments(commentsToInsert);
-      setCollectProgress(`完成！已入库${inserted}条评论`);
-      await loadFromSupabase();
-    } catch { setCollectProgress('采集失败，请重试'); } finally { setCollecting(false); }
-  };
-
-  const pendingGroups = pendingRaw.reduce((acc, r) => {
-    const key = r.source_id;
-    if (!acc[key]) acc[key] = { sourceId: key, platform: r.platform, sourceUrl: r.source_url, items: [] };
-    acc[key].items.push(r);
-    return acc;
-  }, {} as Record<string, { sourceId: string; platform: string; sourceUrl?: string; items: RawComment[] }>);
-
-  const handleLinkRawComments = async () => {
-    if (!linkTarget || !linkPostId || !currentProject) return;
-    const count = await linkRawComments(linkTarget.sourceId, linkPostId, currentProject.id);
-    setToast({ type: 'success', message: `已关联 ${count} 条评论` });
-    setShowLinkDialog(false); setLinkTarget(null); setLinkPostId('');
-    await loadPendingRawComments(); await loadFromSupabase();
-  };
-
-  const handleIgnoreRawComments = async (sourceId: string) => {
-    await ignoreRawComments(sourceId);
-    setToast({ type: 'success', message: '已忽略' });
-    await loadPendingRawComments();
-  };
-
-  const handlePasteJson = async () => {
-    if (!pastedJson.trim()) return;
-    try {
-      const rows = JSON.parse(pastedJson);
-      if (!Array.isArray(rows)) { setToast({ type: 'error', message: 'JSON 需为数组' }); return; }
-      const count = await insertRawComments(rows);
-      setToast({ type: 'success', message: `已导入 ${count} 条` });
-      setPastedJson('');
-      await loadPendingRawComments();
-    } catch { setToast({ type: 'error', message: 'JSON 解析失败' }); }
-  };
-
-  const handleCSVUpload = async (file: File) => {
-    if (!currentProject) return;
-    Papa.parse(file, {
-      header: true, skipEmptyLines: true,
-      complete: async (results) => {
-        const raw = results.data as Record<string, string>[];
-        const data = raw.filter(row => Object.values(row).some(v => v && v.trim()));
-        if (data.length === 0) { setToast({ type: 'error', message: 'CSV 为空' }); return; }
-        const isPosts = data[0]?.title !== undefined && data[0]?.platform !== undefined;
-        if (isPosts) {
-          const postsToInsert = data.map(row => ({ project_id: currentProject.id, platform: (row.platform === 'bilibili' ? 'bilibili' : 'xhs') as 'xhs' | 'bilibili', title: row.title || '', content: row.content || '', likes: parseInt(row.likes) || 0, comments_count: parseInt(row.comments_count) || 0, shares: parseInt(row.shares) || 0, is_aigc: row.is_aigc === 'true', url: row.url || '', collected_by: 'csv' }));
-          const inserted = await batchInsertPosts(postsToInsert);
-          setToast({ type: 'success', message: `已导入 ${inserted} 条笔记` });
-        } else {
-          const commentsToInsert = data.map(row => ({ post_id: row.post_id || '', project_id: currentProject.id, text: row.text || '', likes: parseInt(row.likes) || 0, sampling_tier: (parseInt(row.likes) || 0) >= 100 ? 'high' as const : (parseInt(row.likes) || 0) >= 10 ? 'mid' as const : 'low' as const, is_sampled: true }));
-          const inserted = await batchInsertComments(commentsToInsert);
-          setToast({ type: 'success', message: `已导入 ${inserted} 条评论` });
-        }
-        await loadFromSupabase();
-      },
-    });
-  };
-
   // ─── Config preview ───────────────────────────────────────────
   const configSnippet = crawlerConfig.keyword ? generateConfigSnippet(crawlerConfig) : '';
   const commandSnippet = crawlerConfig.keyword ? generateCommand(crawlerConfig) : '';
 
   // ─── Render ───────────────────────────────────────────────────
-  const stats = currentProject ? computeDemoStats(posts, comments) : null;
+  const stats = useMemo(() => currentProject ? computeDemoStats(posts, comments) : null, [currentProject, posts, comments]);
 
-  const SectionCard = ({ id, title, subtitle, children, defaultOpen = true }: { id: string; title: string; subtitle?: string; children: React.ReactNode; defaultOpen?: boolean }) => {
-    const isOpen = expandedSections[id] ?? defaultOpen;
+  const sectionCardProps = { expandedSections, toggleSection };
+
+  if (pageLoading) {
     return (
-      <div className="glass-card p-6 animate-fade-in">
-        <button onClick={() => toggleSection(id)} className="flex items-center justify-between w-full text-left mb-0">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-[#F8FAFC]">{title}</h2>
-            {subtitle && <p className="text-xs text-[#64748B] mt-0.5">{subtitle}</p>}
+            <div className="h-8 w-64 bg-[#1E293B] rounded animate-pulse" />
+            <div className="h-4 w-40 bg-[#1E293B] rounded animate-pulse mt-2" />
           </div>
-          <svg className={`w-5 h-5 text-[#64748B] transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-        </button>
-        {isOpen && <div className="mt-4">{children}</div>}
+        </div>
+        {[1, 2, 3].map(i => (
+          <div key={i} className="glass-card p-6">
+            <div className="h-5 w-48 bg-[#1E293B] rounded animate-pulse mb-4" />
+            <div className="h-20 bg-[#030712] rounded-lg border border-[#1E293B] animate-pulse" />
+          </div>
+        ))}
       </div>
     );
-  };
-
-  const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
-    <div className="flex items-center gap-2">
-      <span className={`w-2.5 h-2.5 rounded-full ${ok ? 'bg-[#10B981]' : 'bg-[#EF4444]'}`} />
-      <span className={`text-sm ${ok ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>{label}</span>
-    </div>
-  );
+  }
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -408,14 +326,14 @@ export default function P0Page() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-noto-serif-sc)' }}>本地数据采集与导入中心</h1>
-          <p className="text-sm text-[#94A3B8] mt-1">MediaCrawler 集成 · CSV 导入 · 学术日志</p>
+          <p className="text-sm text-[#94A3B8] mt-1">采集 · 导入 · 日志</p>
         </div>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════
           NEW: Environment Detection Dashboard
           ═══════════════════════════════════════════════════════════ */}
-      <SectionCard id="env" title="环境检测仪表盘" subtitle="检查本地工具链是否就绪">
+      <SectionCard {...sectionCardProps} id="env" title="环境检测仪表盘" subtitle="检查本地工具链是否就绪">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           {/* Python */}
           <div className="bg-[#030712] rounded-lg p-4 border border-[#1E293B]">
@@ -475,7 +393,7 @@ export default function P0Page() {
       {/* ═══════════════════════════════════════════════════════════
           Collection Config Form
           ═══════════════════════════════════════════════════════════ */}
-      <SectionCard id="config" title="采集配置" subtitle="配置 MediaCrawler 采集参数">
+      <SectionCard {...sectionCardProps} id="config" title="采集配置" subtitle="生成 MediaCrawler 配置指引（复制粘贴到本地配置文件，非自动执行）">
         {/* Platform toggle */}
         <div className="flex gap-2 mb-4">
           {(['xhs', 'bilibili'] as const).map(p => (
@@ -538,7 +456,7 @@ export default function P0Page() {
       {/* ═══════════════════════════════════════════════════════════
           Mode B: Step-by-step Guide
           ═══════════════════════════════════════════════════════════ */}
-      <SectionCard id="modeB" title="采集步骤指引" subtitle="Mode B：手动执行 MediaCrawler">
+      <SectionCard {...sectionCardProps} id="modeB" title="采集步骤指引" subtitle="手动执行 MediaCrawler 的完整流程">
         <div className="space-y-4">
           {[
             { step: '1', title: '修改配置文件', desc: `将上方"config 文件修改指引"中的内容复制到 ${crawlerConfig.platform === 'xhs' ? 'config/xhs_config.py' : 'config/bilibili_config.py'} 对应位置` },
@@ -560,7 +478,7 @@ export default function P0Page() {
       {/* ═══════════════════════════════════════════════════════════
           Data Files
           ═══════════════════════════════════════════════════════════ */}
-      <SectionCard id="files" title="数据文件" subtitle="扫描 MediaCrawler 输出的 CSV 文件">
+      <SectionCard {...sectionCardProps} id="files" title="数据文件" subtitle="扫描 MediaCrawler / Playwright 输出的 CSV 文件">
         <div className="flex items-center gap-3 mb-4">
           <button onClick={scanFiles} disabled={filesLoading} className="px-4 py-2 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 text-sm hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
             {filesLoading ? '扫描中...' : '扫描文件'}
@@ -570,13 +488,13 @@ export default function P0Page() {
 
         {csvFiles.length === 0 ? (
           <div className="text-center py-6 text-[#64748B] text-sm">
-            {filesLoading ? '扫描中...' : '未找到 CSV 文件。请先运行 MediaCrawler 采集。'}
+            {filesLoading ? '扫描中...' : '未找到 CSV 文件。请先运行 MediaCrawler 或 Playwright 脚本采集数据。'}
           </div>
         ) : (
           <div className="space-y-2">
             {csvFiles.map((file, i) => (
-              <div key={i} className="flex items-center justify-between bg-[#030712] rounded-lg p-3 border border-[#1E293B] hover:border-[#334155] transition-colors">
-                <div className="flex items-center gap-3">
+              <div key={i} className="flex flex-wrap items-center justify-between bg-[#030712] rounded-lg p-3 border border-[#1E293B] hover:border-[#334155] transition-colors gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className={cn('px-2 py-0.5 rounded text-xs font-medium', file.platform === 'xhs' ? 'bg-[#FE2C55]/10 text-[#FE2C55]' : 'bg-[#00A1D6]/10 text-[#00A1D6]')}>
                     {file.platform === 'xhs' ? '小红书' : 'B站'}
                   </span>
@@ -599,9 +517,12 @@ export default function P0Page() {
           CSV Import Preview
           ═══════════════════════════════════════════════════════════ */}
       {selectedFile && (
-        <SectionCard id="import" title={`导入预览：${selectedFile.name}`} subtitle={selectedFile.platform === 'xhs' ? '小红书' : 'B站'}>
+        <SectionCard {...sectionCardProps} id="import" title={`导入预览：${selectedFile.name}`} subtitle={selectedFile.platform === 'xhs' ? '小红书' : 'B站'}>
           {previewLoading ? (
-            <p className="text-sm text-[#94A3B8]">加载预览...</p>
+            <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+              加载预览...
+            </div>
           ) : importPreview ? (
             <>
               {/* Stats */}
@@ -651,17 +572,20 @@ export default function P0Page() {
               {/* Post selector */}
               <div className="mb-4">
                 <label className="text-xs text-[#64748B] mb-1 block">选择目标帖子</label>
-                <select value={importPostId} onChange={e => setImportPostId(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none">
-                  <option value="">选择帖子...</option>
+                <select value={importPostId} onChange={e => { setImportPostId(e.target.value); setImportNewPostTitle(''); }} className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none">
+                  <option value="">选择已有帖子...</option>
                   {posts.map(p => (
                     <option key={p.id} value={p.id}>[{p.platform}] {p.title?.slice(0, 50)}</option>
                   ))}
                 </select>
-                {posts.length === 0 && <p className="text-xs text-[#F59E0B] mt-1">当前项目无帖子，请先创建</p>}
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-xs text-[#64748B]">或</span>
+                  <input type="text" value={importNewPostTitle} onChange={e => { setImportNewPostTitle(e.target.value); setImportPostId(''); }} placeholder="输入标题自动创建帖子..." className="flex-1 px-3 py-1.5 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-xs focus:border-[#3B82F6] outline-none" />
+                </div>
               </div>
 
               <div className="flex gap-3">
-                <button onClick={handleImport} disabled={!importPostId || importing} className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-sm hover:bg-[#059669] transition-colors disabled:opacity-50">
+                <button onClick={handleImport} disabled={(!importPostId && !importNewPostTitle.trim()) || importing} className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-sm hover:bg-[#059669] transition-colors disabled:opacity-50">
                   {importing ? '导入中...' : `确认导入 ${importPreview.stats.kept} 条`}
                 </button>
                 <button onClick={() => { setSelectedFile(null); setImportPreview(null); }} className="px-4 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-sm">
@@ -678,7 +602,7 @@ export default function P0Page() {
       {/* ═══════════════════════════════════════════════════════════
           Collection History (local_logs)
           ═══════════════════════════════════════════════════════════ */}
-      <SectionCard id="guide" title="采集历史日志" subtitle="local_logs 记录">
+      <SectionCard {...sectionCardProps} id="guide" title="采集历史日志" subtitle="local_logs 记录">
         <div className="flex items-center gap-3 mb-4">
           <button onClick={loadLocalLogs} disabled={logsLoading} className="px-4 py-2 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 text-sm hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
             {logsLoading ? '刷新中...' : '刷新'}
@@ -729,7 +653,7 @@ export default function P0Page() {
                 <p className="text-sm text-[#F8FAFC]">安装依赖（仅首次）</p>
                 <div className="space-y-2 mt-1">
                   {[
-                    { label: '进入项目目录', cmd: 'cd C:\\Users\\ht\\Documents\\outeye4.0\\outeye-pulse' },
+                    { label: '进入项目目录（替换为你的实际路径）', cmd: 'cd <你的项目路径>/outeye-pulse' },
                     { label: '安装 npm 依赖', cmd: 'cd scripts\\playwright-scraper && npm install' },
                     { label: '安装 Chromium 浏览器', cmd: 'npx playwright install chromium' },
                   ].map((s, i) => (
@@ -804,84 +728,9 @@ export default function P0Page() {
 
         <div className="mt-3 p-3 rounded-lg bg-[#030712] border border-[#1E293B]">
           <p className="text-xs text-[#94A3B8]">
-            Cookie 保存在 <code className="text-[#64748B]">scripts/playwright-scraper/cookies.json</code>，B站和小红书共用。CSV 输出到 <code className="text-[#64748B]">scripts/playwright-scraper/output/</code>。中断采集时已采集数据自动保存到同名 <code className="text-[#64748B]">_partial.csv</code> 文件。
+            Cookie 分平台保存：<code className="text-[#64748B]">cookies-bilibili.json</code>（B站）和 <code className="text-[#64748B]">cookies-xhs.json</code>（小红书），互不干扰。CSV 输出到 <code className="text-[#64748B]">scripts/playwright-scraper/output/</code>。中断采集时已采集数据自动保存到同名 <code className="text-[#64748B]">_partial.csv</code> 文件。
           </p>
         </div>
-      </div>
-
-      {/* ═══════════════════════════════════════════════════════════
-          DEPRECATED SECTIONS (collapsed)
-          ═══════════════════════════════════════════════════════════ */}
-      <div className="border border-[#1E293B]/50 rounded-lg p-4 opacity-60 hover:opacity-80 transition-opacity">
-        <p className="text-xs text-[#64748B] mb-3 font-medium">以下为旧模块（已折叠），功能已迁移至上方新模块</p>
-
-        {/* Old: Create Project */}
-        <SectionCard id="oldProject" title="[旧] 创建新项目" defaultOpen={false}>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input type="text" placeholder="项目名称" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} className="px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm" />
-            <input type="text" placeholder="监测关键词" value={newProjectKeyword} onChange={e => setNewProjectKeyword(e.target.value)} className="px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm" />
-            <button onClick={createNewProject} disabled={!newProjectName || !newProjectKeyword} className="px-4 py-2 rounded-lg bg-[#3B82F6] text-white text-sm disabled:opacity-50">创建项目</button>
-          </div>
-        </SectionCard>
-
-        {/* Old: B站 API collection */}
-        <SectionCard id="oldCollect" title="[旧] B站快速采集（API）" defaultOpen={false}>
-          <div className="flex gap-3">
-            <input type="text" placeholder="B站视频链接或BV号" value={bilibiliUrl} onChange={e => setBilibiliUrl(e.target.value)} className="flex-1 px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm" />
-            <button onClick={collectBilibiliData} disabled={collecting || !bilibiliUrl || !currentProject} className="px-4 py-2 rounded-lg bg-[#3B82F6] text-white text-sm disabled:opacity-50">{collecting ? '采集中...' : '采集热评'}</button>
-          </div>
-          {collectProgress && <p className="mt-2 text-xs text-[#94A3B8]">{collectProgress}</p>}
-        </SectionCard>
-
-        {/* Old: Bookmarklet */}
-        <SectionCard id="oldBookmarklet" title="[旧] 小红书 Bookmarklet" defaultOpen={false}>
-          <div className="flex items-center gap-3">
-            <a href={BOOKMARKLET_URL} className="px-4 py-2 rounded-lg bg-[#F59E0B]/10 text-[#FCD34D] border border-[#F59E0B]/20 text-sm cursor-grab" draggable="true" onClick={e => e.preventDefault()}>OutEye 采集助手</a>
-            <button onClick={() => copyText(BOOKMARKLET_URL, 'bm-old')} className="text-xs text-[#60A5FA]">{recentCopy === 'bm-old' ? '已复制' : '复制代码'}</button>
-          </div>
-        </SectionCard>
-
-        {/* Old: Pending Raw Comments */}
-        <SectionCard id="oldPending" title="[旧] 待认领采集数据" defaultOpen={false}>
-          <div className="flex items-center justify-between mb-3">
-            <button onClick={loadPendingRawComments} disabled={pendingLoading} className="text-xs text-[#60A5FA]">{pendingLoading ? '刷新中...' : '刷新'}</button>
-          </div>
-          <textarea value={pastedJson} onChange={e => setPastedJson(e.target.value)} placeholder="粘贴 JSON" rows={3} className="w-full px-3 py-2 rounded-lg bg-[#111827] text-[#F8FAFC] border border-[#1E293B] text-xs font-mono resize-none mb-2" />
-          <button onClick={handlePasteJson} disabled={!pastedJson.trim()} className="px-3 py-1.5 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] text-xs disabled:opacity-50 mb-4">导入</button>
-          {Object.keys(pendingGroups).length === 0 ? (
-            <p className="text-sm text-[#64748B]">{pendingLoading ? '加载中...' : '暂无待认领数据'}</p>
-          ) : (
-            <div className="space-y-2">
-              {Object.values(pendingGroups).map(group => (
-                <div key={group.sourceId} className="bg-[#030712] rounded-lg p-3 border border-[#1E293B] flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className={cn('px-2 py-0.5 rounded text-xs', group.platform === 'bilibili' ? 'bg-[#00A1D6]/10 text-[#00A1D6]' : 'bg-[#FE2C55]/10 text-[#FE2C55]')}>{group.platform === 'bilibili' ? 'B站' : '小红书'}</span>
-                    <span className="text-xs font-mono text-[#F8FAFC]">{group.sourceId}</span>
-                    <span className="text-xs text-[#64748B]">{group.items.length} 条</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => { setLinkTarget({ sourceId: group.sourceId, platform: group.platform }); setLinkPostId(''); setShowLinkDialog(true); }} className="px-3 py-1 rounded-lg bg-[#10B981]/10 text-[#6EE7B7] text-xs">认领</button>
-                    <button onClick={() => handleIgnoreRawComments(group.sourceId)} className="px-3 py-1 rounded-lg bg-[#EF4444]/10 text-[#FCA5A5] text-xs">忽略</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Old: CSV Upload */}
-        <SectionCard id="oldCsv" title="[旧] CSV 数据导入" defaultOpen={false}>
-          <div className="border-2 border-dashed border-[#1E293B] rounded-lg p-6 text-center" onDragOver={e => { e.preventDefault(); }} onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file?.name.endsWith('.csv')) handleCSVUpload(file); }}>
-            <p className="text-sm text-[#94A3B8] mb-2">拖拽 CSV 或点击上传</p>
-            <input type="file" accept=".csv" className="hidden" id="csv-upload-old" onChange={e => { const file = e.target.files?.[0]; if (file) handleCSVUpload(file); }} />
-            <label htmlFor="csv-upload-old" className="inline-block px-4 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-sm cursor-pointer">选择文件</label>
-          </div>
-        </SectionCard>
-
-        {/* Old: Export */}
-        <SectionCard id="oldExport" title="[旧] 项目导出" defaultOpen={false}>
-          <button onClick={() => { const data = { project: currentProject, posts, comments, exportedAt: new Date().toISOString() }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${currentProject?.name || 'project'}.outeye`; a.click(); }} className="px-4 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-sm">导出项目文件</button>
-        </SectionCard>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════
@@ -908,39 +757,14 @@ export default function P0Page() {
         </div>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Modals
-          ═══════════════════════════════════════════════════════════ */}
-      {showLinkDialog && linkTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={() => setShowLinkDialog(false)}>
-          <div className="glass-card max-w-md w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-[#F8FAFC] mb-2">认领采集数据</h3>
-            <p className="text-sm text-[#94A3B8] mb-4">将 <span className="text-[#F8FAFC] font-mono">{linkTarget.sourceId}</span> 的 {pendingGroups[linkTarget.sourceId]?.items.length || 0} 条评论关联到帖子。</p>
-            <select value={linkPostId} onChange={e => setLinkPostId(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm mb-4">
-              <option value="">选择帖子...</option>
-              {posts.map(p => <option key={p.id} value={p.id}>[{p.platform}] {p.title?.slice(0, 40)}</option>)}
-            </select>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowLinkDialog(false)} className="px-4 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-sm">取消</button>
-              <button onClick={handleLinkRawComments} disabled={!linkPostId} className="px-4 py-2 rounded-lg bg-[#10B981] text-white text-sm disabled:opacity-50">确认关联</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showTour && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="dialog" onClick={() => setShowTour(false)}>
-          <div className="glass-card max-w-md w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
-            <p className="text-sm text-[#94A3B8]">功能导览已移至新界面</p>
-            <button onClick={() => setShowTour(false)} className="mt-4 px-4 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-sm">关闭</button>
-          </div>
-        </div>
-      )}
 
       {/* Toast */}
       {toast && (
-        <div className={cn('fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm animate-fade-in', toast.type === 'success' ? 'bg-[#10B981]/90 text-white' : 'bg-[#EF4444]/90 text-white')}>
+        <div className={cn('fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm animate-fade-in flex items-center gap-3', toast.type === 'success' ? 'bg-[#10B981]/90 text-white' : 'bg-[#EF4444]/90 text-white')}>
           {toast.message}
+          <button onClick={() => setToast(null)} className="text-white/70 hover:text-white transition-colors">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
         </div>
       )}
     </div>

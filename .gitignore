@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright scraper
+scripts/playwright-scraper/cookies-*.json
+scripts/playwright-scraper/output/
+scripts/playwright-scraper/node_modules/

@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
-import { execSync } from 'child_process';
 import { existsSync } from 'fs';
 import path from 'path';
 
 function run(cmd: string): { ok: boolean; output: string } {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execSync } = require('child_process');
     const out = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim();
     return { ok: true, output: out };
   } catch {
@@ -18,20 +19,35 @@ function extractVersion(raw: string): string {
 }
 
 export async function GET() {
+  // Detect if running on Vercel (serverless, no local tools)
+  const isVercel = !!process.env.VERCEL;
   const toolsDir = path.join(process.cwd(), 'tools', 'MediaCrawler');
 
-  // Python: try python, then py (Windows Store wrapper blocks `python`)
+  if (isVercel) {
+    return NextResponse.json({
+      python: false,
+      pythonVersion: null,
+      playwright: false,
+      playwrightVersion: null,
+      mediaCrawlerStatus: 'not_found' as const,
+      mediaCrawlerConfig: false,
+      dataDir: false,
+      toolsDir,
+      allReady: false,
+      isCloud: true,
+    });
+  }
+
+  // Local environment detection
   const py1 = run('python --version');
   const py2 = py1.ok && py1.output ? py1 : run('py --version');
   const python = py2.ok && /python/i.test(py2.output);
   const pythonVersion = python ? extractVersion(py2.output) : null;
 
-  // Playwright: npx resolves local dep, bare `playwright` may not exist
   const pw = run('npx playwright --version');
   const playwright = pw.ok;
   const playwrightVersion = playwright ? extractVersion(pw.output) : null;
 
-  // MediaCrawler: downloaded? venv configured?
   const mcMain = existsSync(path.join(toolsDir, 'main.py'));
   const mcConfig = existsSync(path.join(toolsDir, 'config'));
   const mcVenv = existsSync(path.join(toolsDir, 'venv'));
@@ -57,5 +73,6 @@ export async function GET() {
     dataDir,
     toolsDir,
     allReady: python && mediaCrawlerStatus === 'ready',
+    isCloud: false,
   });
 }
