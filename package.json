@@ -9,15 +9,32 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.106.2",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.3.0",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "file-saver": "^2.0.5",
+    "html2canvas": "^1.4.1",
+    "lucide-react": "^1.17.0",
     "next": "16.2.6",
+    "papaparse": "^5.5.3",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "simple-statistics": "^7.8.9",
+    "swr": "^2.4.1",
+    "tailwind-merge": "^3.6.0",
+    "uuid": "^14.0.0",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
