@@ -44,3 +44,9 @@ next-env.d.ts
 scripts/playwright-scraper/cookies-*.json
 scripts/playwright-scraper/output/
 scripts/playwright-scraper/node_modules/
+
+# agent scripts
+scripts/agent/cookies-*.json
+scripts/agent/output/
+__pycache__/
+*.pyc
