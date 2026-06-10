@@ -1,12 +1,22 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { generateDemoProject, computeDemoStats } from '@/lib/demo-data';
 import { fetchProjects, fetchPosts, fetchComments, createProject, createPost, fetchLocalLogs } from '@/lib/supabase-service';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
 import { generateConfigSnippet, generateCommand, type CrawlerConfig } from '@/lib/media-crawler';
+import { LoadingSpinner } from '@/components/ui';
 import type { LocalLog } from '@/types';
+
+function useIsLocal() {
+  const [isLocal, setIsLocal] = useState(false);
+  useEffect(() => {
+    const host = window.location.hostname;
+    setIsLocal(host === 'localhost' || host === '127.0.0.1' || host === '[::1]');
+  }, []);
+  return isLocal;
+}
 
 // ─── Env status types ───────────────────────────────────────────
 interface EnvStatus {
@@ -47,13 +57,7 @@ function PlaywrightFaq() {
       </button>
       {open && (
         <div className="mt-3 space-y-3 ml-5">
-          {[
-            { q: 'Cookie 过期了怎么办？', a: 'B站：删除 scripts/playwright-scraper/cookies-bilibili.json，重新运行命令，浏览器打开后登录即可自动更新。小红书：删除 cookies-xhs.json 后运行 --login 重新扫码。' },
-            { q: '提示 HTTP 412 或限流', a: 'B站反爬机制触发。脚本会自动重试（最多3次，指数退避）。如果仍然失败，已采集的数据会自动保存到 _partial.csv 文件，不会丢失。等待 30 分钟后重试。' },
-            { q: '采集过程中按了 Ctrl+C，数据会丢失吗？', a: '不会。脚本捕获 Ctrl+C 信号，会自动将已采集的数据保存到 output/ 目录下的 _partial.csv 文件。' },
-            { q: '小红书采集失败，提示选择器失效', a: '小红书脚本使用 API 拦截方式（不依赖 DOM 选择器），但小红书 API 可能更新。如果 API 拦截失败，脚本会自动降级到 DOM 提取。如果两种方式都失败，请检查 Cookie 是否有效（运行 --login 重新登录）。' },
-            { q: '采集的 CSV 如何导入系统？', a: '回到上方"数据文件"区域，点击"扫描文件"，找到 output/ 目录下的 CSV，点击"预览"后导入。' },
-          ].map((faq, i) => (
+          {PLAYWRIGHT_FAQ.map((faq, i) => (
             <div key={i} className="text-xs">
               <p className="text-[#FCD34D] mb-1">Q: {faq.q}</p>
               <p className="text-[#94A3B8]">A: {faq.a}</p>
@@ -81,6 +85,14 @@ const SectionCard = ({ id, title, subtitle, children, defaultOpen = true, expand
   );
 };
 
+const PLAYWRIGHT_FAQ = [
+  { q: 'Cookie 过期了怎么办？', a: 'B站：删除 scripts/playwright-scraper/cookies-bilibili.json，重新运行命令，浏览器打开后登录即可自动更新。小红书：删除 cookies-xhs.json 后运行 --login 重新扫码。' },
+  { q: '提示 HTTP 412 或限流', a: 'B站反爬机制触发。脚本会自动重试（最多3次，指数退避）。如果仍然失败，已采集的数据会自动保存到 _partial.csv 文件，不会丢失。等待 30 分钟后重试。' },
+  { q: '采集过程中按了 Ctrl+C，数据会丢失吗？', a: '不会。脚本捕获 Ctrl+C 信号，会自动将已采集的数据保存到 output/ 目录下的 _partial.csv 文件。' },
+  { q: '小红书采集失败，提示选择器失效', a: '小红书脚本使用 API 拦截方式（不依赖 DOM 选择器），但小红书 API 可能更新。如果 API 拦截失败，脚本会自动降级到 DOM 提取。如果两种方式都失败，请检查 Cookie 是否有效（运行 --login 重新登录）。' },
+  { q: '采集的 CSV 如何导入系统？', a: '回到上方"数据文件"区域，点击"扫描文件"，找到 output/ 目录下的 CSV，点击"预览"后导入。' },
+];
+
 const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
   <div className="flex items-center gap-2">
     <span className={`w-2.5 h-2.5 rounded-full ${ok ? 'bg-[#10B981]' : 'bg-[#EF4444]'}`} />
@@ -89,6 +101,7 @@ const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
 );
 
 export default function P0Page() {
+  const isLocal = useIsLocal();
   const { currentProject, setCurrentProject, setPosts, setComments, posts, comments, projects, addProject, setProjects } = useAppStore();
 
   // ─── Toast ────────────────────────────────────────────────────
@@ -100,11 +113,13 @@ export default function P0Page() {
   }, [toast]);
 
   const [recentCopy, setRecentCopy] = useState<string | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const copyText = (text: string, id: string) => {
     navigator.clipboard.writeText(text).then(() => {
+      clearTimeout(copyTimerRef.current);
       setRecentCopy(id);
       setToast({ type: 'success', message: '已复制到剪贴板' });
-      setTimeout(() => setRecentCopy(null), 2000);
+      copyTimerRef.current = setTimeout(() => setRecentCopy(null), 2000);
     }).catch(() => setToast({ type: 'error', message: '复制失败' }));
   };
 
@@ -174,14 +189,9 @@ export default function P0Page() {
   const [localLogs, setLocalLogs] = useState<LocalLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
 
-  // ─── Page loading state ──────────────────────────────────────
   const [pageLoading, setPageLoading] = useState(true);
-
-  // ─── Section states ───────────────────────────────────────────
   const [demoLoaded, setDemoLoaded] = useState(false);
   const [importNewPostTitle, setImportNewPostTitle] = useState('');
-
-  // ─── Mount ────────────────────────────────────────────────────
   const loadLocalLogs = useCallback(async () => {
     setLogsLoading(true);
     const data = await fetchLocalLogs(20);
@@ -212,9 +222,8 @@ export default function P0Page() {
       setProjects(validProjects);
       const project = validProjects[0];
       setCurrentProject(project);
-      const postsData = await fetchPosts(project.id);
+      const [postsData, commentsData] = await Promise.all([fetchPosts(project.id), fetchComments(project.id)]);
       setPosts(postsData);
-      const commentsData = await fetchComments(project.id);
       setComments(commentsData);
     } else if (!demoLoaded) {
       loadDemoProject();
@@ -222,7 +231,9 @@ export default function P0Page() {
   }, [demoLoaded, loadDemoProject, setProjects, setCurrentProject, setPosts, setComments]);
 
   useEffect(() => {
-    Promise.allSettled([checkEnv(), scanFiles(), loadLocalLogs(), loadFromSupabase()]).then(() => setPageLoading(false));
+    const tasks = isLocal ? [checkEnv(), scanFiles()] : [scanFiles()];
+    tasks.push(loadLocalLogs(), loadFromSupabase());
+    Promise.allSettled(tasks).then(() => setPageLoading(false));
   }, []);
 
   // ─── Import handlers ──────────────────────────────────────────
@@ -263,7 +274,6 @@ export default function P0Page() {
       });
       if (!newPost) { setToast({ type: 'error', message: '创建帖子失败' }); return; }
       postId = newPost.id;
-      await loadFromSupabase();
     }
 
     if (!postId) { setToast({ type: 'error', message: '请选择帖子或输入帖子标题' }); return; }
@@ -282,9 +292,7 @@ export default function P0Page() {
       setSelectedFile(null);
       setImportPostId('');
       setImportNewPostTitle('');
-      await scanFiles();
-      await loadLocalLogs();
-      await loadFromSupabase();
+      await Promise.all([scanFiles(), loadLocalLogs(), loadFromSupabase()]);
     } catch {
       setToast({ type: 'error', message: '导入失败' });
     } finally {
@@ -292,11 +300,9 @@ export default function P0Page() {
     }
   };
 
-  // ─── Config preview ───────────────────────────────────────────
-  const configSnippet = crawlerConfig.keyword ? generateConfigSnippet(crawlerConfig) : '';
-  const commandSnippet = crawlerConfig.keyword ? generateCommand(crawlerConfig) : '';
+  const configSnippet = useMemo(() => crawlerConfig.keyword ? generateConfigSnippet(crawlerConfig) : '', [crawlerConfig]);
+  const commandSnippet = useMemo(() => crawlerConfig.keyword ? generateCommand(crawlerConfig) : '', [crawlerConfig]);
 
-  // ─── Render ───────────────────────────────────────────────────
   const stats = useMemo(() => currentProject ? computeDemoStats(posts, comments) : null, [currentProject, posts, comments]);
 
   const sectionCardProps = { expandedSections, toggleSection };
@@ -322,18 +328,19 @@ export default function P0Page() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-noto-serif-sc)' }}>本地数据采集与导入中心</h1>
-          <p className="text-sm text-[#94A3B8] mt-1">采集 · 导入 · 日志</p>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-noto-serif-sc)' }}>本地数据采集与导入中心</h1>
+        <p className="text-sm text-[#94A3B8] mt-1">采集 · 导入 · 日志</p>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════
-          NEW: Environment Detection Dashboard
-          ═══════════════════════════════════════════════════════════ */}
-      <SectionCard {...sectionCardProps} id="env" title="环境检测仪表盘" subtitle="检查本地工具链是否就绪">
+      {!isLocal && (
+        <div className="glass-card p-6 animate-fade-in border border-[#3B82F6]/20">
+          <h2 className="text-lg font-semibold text-[#60A5FA] mb-1">本地采集工具</h2>
+          <p className="text-sm text-[#94A3B8]">数据采集功能仅在本地开发环境（<code className="text-[#64748B]">npm run dev</code>）使用。请在本机运行项目后，使用 MediaCrawler 或 Playwright 采集 CSV，再通过下方"数据文件"区域导入。</p>
+        </div>
+      )}
+
+      {isLocal && <SectionCard {...sectionCardProps} id="env" title="环境检测仪表盘" subtitle="检查本地工具链是否就绪">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
           {/* Python */}
           <div className="bg-[#030712] rounded-lg p-4 border border-[#1E293B]">
@@ -388,12 +395,9 @@ export default function P0Page() {
         <button onClick={checkEnv} disabled={envLoading} className="px-4 py-2 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 text-sm hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
           {envLoading ? '检测中...' : '重新检测'}
         </button>
-      </SectionCard>
+      </SectionCard>}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Collection Config Form
-          ═══════════════════════════════════════════════════════════ */}
-      <SectionCard {...sectionCardProps} id="config" title="采集配置" subtitle="生成 MediaCrawler 配置指引（复制粘贴到本地配置文件，非自动执行）">
+      {isLocal && <SectionCard {...sectionCardProps} id="config" title="采集配置" subtitle="生成 MediaCrawler 配置指引（复制粘贴到本地配置文件，非自动执行）">
         {/* Platform toggle */}
         <div className="flex gap-2 mb-4">
           {(['xhs', 'bilibili'] as const).map(p => (
@@ -451,12 +455,9 @@ export default function P0Page() {
             </div>
           </div>
         )}
-      </SectionCard>
+      </SectionCard>}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Mode B: Step-by-step Guide
-          ═══════════════════════════════════════════════════════════ */}
-      <SectionCard {...sectionCardProps} id="modeB" title="采集步骤指引" subtitle="手动执行 MediaCrawler 的完整流程">
+      {isLocal && <SectionCard {...sectionCardProps} id="modeB" title="采集步骤指引" subtitle="手动执行 MediaCrawler 的完整流程">
         <div className="space-y-4">
           {[
             { step: '1', title: '修改配置文件', desc: `将上方"config 文件修改指引"中的内容复制到 ${crawlerConfig.platform === 'xhs' ? 'config/xhs_config.py' : 'config/bilibili_config.py'} 对应位置` },
@@ -473,11 +474,8 @@ export default function P0Page() {
             </div>
           ))}
         </div>
-      </SectionCard>
+      </SectionCard>}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Data Files
-          ═══════════════════════════════════════════════════════════ */}
       <SectionCard {...sectionCardProps} id="files" title="数据文件" subtitle="扫描 MediaCrawler / Playwright 输出的 CSV 文件">
         <div className="flex items-center gap-3 mb-4">
           <button onClick={scanFiles} disabled={filesLoading} className="px-4 py-2 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 text-sm hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
@@ -488,12 +486,12 @@ export default function P0Page() {
 
         {csvFiles.length === 0 ? (
           <div className="text-center py-6 text-[#64748B] text-sm">
-            {filesLoading ? '扫描中...' : '未找到 CSV 文件。请先运行 MediaCrawler 或 Playwright 脚本采集数据。'}
+            {filesLoading ? '扫描中...' : isLocal ? '未找到 CSV 文件。请先运行 MediaCrawler 或 Playwright 脚本采集数据。' : '线上环境无法扫描本地文件。请在本地运行采集后，通过上方导入功能上传 CSV。'}
           </div>
         ) : (
           <div className="space-y-2">
-            {csvFiles.map((file, i) => (
-              <div key={i} className="flex flex-wrap items-center justify-between bg-[#030712] rounded-lg p-3 border border-[#1E293B] hover:border-[#334155] transition-colors gap-2">
+            {csvFiles.map((file) => (
+              <div key={file.path} className="flex flex-wrap items-center justify-between bg-[#030712] rounded-lg p-3 border border-[#1E293B] hover:border-[#334155] transition-colors gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={cn('px-2 py-0.5 rounded text-xs font-medium', file.platform === 'xhs' ? 'bg-[#FE2C55]/10 text-[#FE2C55]' : 'bg-[#00A1D6]/10 text-[#00A1D6]')}>
                     {file.platform === 'xhs' ? '小红书' : 'B站'}
@@ -513,14 +511,11 @@ export default function P0Page() {
         )}
       </SectionCard>
 
-      {/* ═══════════════════════════════════════════════════════════
-          CSV Import Preview
-          ═══════════════════════════════════════════════════════════ */}
       {selectedFile && (
         <SectionCard {...sectionCardProps} id="import" title={`导入预览：${selectedFile.name}`} subtitle={selectedFile.platform === 'xhs' ? '小红书' : 'B站'}>
           {previewLoading ? (
             <div className="flex items-center gap-2 text-sm text-[#94A3B8]">
-              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+              <LoadingSpinner size="sm" />
               加载预览...
             </div>
           ) : importPreview ? (
@@ -599,9 +594,6 @@ export default function P0Page() {
         </SectionCard>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Collection History (local_logs)
-          ═══════════════════════════════════════════════════════════ */}
       <SectionCard {...sectionCardProps} id="guide" title="采集历史日志" subtitle="local_logs 记录">
         <div className="flex items-center gap-3 mb-4">
           <button onClick={loadLocalLogs} disabled={logsLoading} className="px-4 py-2 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 text-sm hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
@@ -631,10 +623,7 @@ export default function P0Page() {
         )}
       </SectionCard>
 
-      {/* ═══════════════════════════════════════════════════════════
-          Playwright Emergency Collection
-          ═══════════════════════════════════════════════════════════ */}
-      <div className="glass-card p-6 animate-fade-in border border-[#F59E0B]/20">
+      {isLocal && <div className="glass-card p-6 animate-fade-in border border-[#F59E0B]/20">
         <h2 className="text-lg font-semibold text-[#FCD34D] mb-1">应急采集脚本（Playwright）</h2>
         <p className="text-xs text-[#64748B] mb-4">适用于 MediaCrawler 无法覆盖的场景：B站深度采集、小红书指定笔记</p>
 
@@ -731,11 +720,8 @@ export default function P0Page() {
             Cookie 分平台保存：<code className="text-[#64748B]">cookies-bilibili.json</code>（B站）和 <code className="text-[#64748B]">cookies-xhs.json</code>（小红书），互不干扰。CSV 输出到 <code className="text-[#64748B]">scripts/playwright-scraper/output/</code>。中断采集时已采集数据自动保存到同名 <code className="text-[#64748B]">_partial.csv</code> 文件。
           </p>
         </div>
-      </div>
+      </div>}
 
-      {/* ═══════════════════════════════════════════════════════════
-          Current Project Status (quick ref)
-          ═══════════════════════════════════════════════════════════ */}
       {currentProject && stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-fade-in">
           <div className="glass-card p-4">
