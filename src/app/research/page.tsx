@@ -4,7 +4,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { useChartStore } from '@/stores/useChartStore';
 import { computeDemoStats } from '@/lib/demo-data';
-import { cn, formatNumber, formatPercent, getNarrativeLabel, getDimensionLabel, getRiskColor, getRiskLabel, NARRATIVE_COLORS } from '@/lib/utils';
+import { cn, formatNumber, formatPercent, getNarrativeLabel, getDimensionLabel, getRiskLabel, NARRATIVE_COLORS } from '@/lib/utils';
+import type { Post, Comment } from '@/types';
 import dynamic from 'next/dynamic';
 
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -16,6 +17,33 @@ const DIMENSIONS = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
 function avgDim(arr: { analysis: any }[], dim: string): number {
   if (arr.length === 0) return 0;
   return arr.reduce((s, c) => s + (Number(c.analysis?.[dim]) || 0), 0) / arr.length;
+}
+
+const RADAR_BASE = {
+  indicator: DIMENSIONS.map(d => ({ name: getDimensionLabel(d), max: 10 })),
+  shape: 'polygon' as const,
+  splitNumber: 4,
+  axisName: { color: '#94A3B8', fontSize: 10 },
+  splitLine: { lineStyle: { color: '#1E293B' } },
+  splitArea: { areaStyle: { color: ['transparent'] } },
+  axisLine: { lineStyle: { color: '#334155' } },
+};
+
+const CARD_STYLE_MAP: Record<string, { bg: string; text: string; label: string }> = {
+  blue: { bg: 'bg-[#3B82F6]/10', text: 'text-[#60A5FA]', label: '发现' },
+  amber: { bg: 'bg-[#F59E0B]/10', text: 'text-[#FCD34D]', label: '提示' },
+  red: { bg: 'bg-[#EF4444]/10', text: 'text-[#F87171]', label: '警告' },
+};
+
+function computeNarrativeCounts(analyzed: Comment[]): { topType: string | null; topCount: number; total: number } {
+  const counts: Record<string, number> = {};
+  for (const c of analyzed) {
+    const nt = c.analysis?.narrative_type;
+    if (nt) counts[nt] = (counts[nt] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 0) return { topType: null, topCount: 0, total: analyzed.length };
+  return { topType: sorted[0][0], topCount: sorted[0][1], total: analyzed.length };
 }
 
 // ─── Quick Collect Bar ──────────────────────────────────────────
@@ -148,24 +176,22 @@ function ResearchBanner({ postCount, commentCount, analyzedCount }: { postCount:
 
 // ─── Insight Cards ──────────────────────────────────────────────
 
-function InsightCards({ posts, analyzed }: { posts: { id: string; platform: string; is_aigc: boolean }[]; analyzed: { analysis: { narrative_type: string | null; risk_level: string | null; d2_valence: number | null; d3: number | null } | null }[] }) {
+function InsightCards({ posts, analyzed, narrativeStats }: {
+  posts: Post[];
+  analyzed: Comment[];
+  narrativeStats: { topType: string | null; topCount: number; total: number };
+}) {
   const insights = useMemo(() => {
     const cards: { type: 'blue' | 'amber' | 'red'; title: string; body: string; action: string; targetId: string }[] = [];
     if (analyzed.length === 0) return cards;
 
     // Narrative dominance
-    const narrativeCounts: Record<string, number> = {};
-    for (const c of analyzed) {
-      const nt = c.analysis?.narrative_type;
-      if (nt) narrativeCounts[nt] = (narrativeCounts[nt] || 0) + 1;
-    }
-    const topNarrative = Object.entries(narrativeCounts).sort((a, b) => b[1] - a[1])[0];
-    if (topNarrative) {
-      const pct = ((topNarrative[1] / analyzed.length) * 100).toFixed(1);
+    if (narrativeStats.topType) {
+      const pct = ((narrativeStats.topCount / narrativeStats.total) * 100).toFixed(1);
       cards.push({
         type: 'blue',
-        title: `主导叙事类型：${getNarrativeLabel(topNarrative[0])}`,
-        body: `${getNarrativeLabel(topNarrative[0])}（${topNarrative[0]}）占所有评论的 ${pct}%（n=${topNarrative[1]}），是当前数据中最主要的叙事模式。`,
+        title: `主导叙事类型：${getNarrativeLabel(narrativeStats.topType)}`,
+        body: `${getNarrativeLabel(narrativeStats.topType)}（${narrativeStats.topType}）占所有评论的 ${pct}%（n=${narrativeStats.topCount}），是当前数据中最主要的叙事模式。`,
         action: '查看叙事分布',
         targetId: 'chart-narrative',
       });
@@ -209,7 +235,7 @@ function InsightCards({ posts, analyzed }: { posts: { id: string; platform: stri
     }
 
     return cards;
-  }, [posts, analyzed]);
+  }, [posts, analyzed, narrativeStats]);
 
   if (insights.length === 0) return null;
 
@@ -223,11 +249,10 @@ function InsightCards({ posts, analyzed }: { posts: { id: string; platform: stri
             </h3>
             <span className={cn(
               'px-2 py-0.5 rounded text-[10px] font-medium',
-              card.type === 'blue' ? 'bg-[#3B82F6]/10 text-[#60A5FA]' :
-              card.type === 'amber' ? 'bg-[#F59E0B]/10 text-[#FCD34D]' :
-              'bg-[#EF4444]/10 text-[#F87171]'
+              CARD_STYLE_MAP[card.type]?.bg,
+              CARD_STYLE_MAP[card.type]?.text,
             )}>
-              {card.type === 'blue' ? '发现' : card.type === 'amber' ? '提示' : '警告'}
+              {CARD_STYLE_MAP[card.type]?.label}
             </span>
           </div>
           <p className="text-xs text-[#94A3B8] leading-relaxed mb-3">{card.body}</p>
@@ -250,8 +275,10 @@ export default function ResearchPage() {
   const { selectedNarrativeType, setSelectedNarrativeType } = useChartStore();
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const analyzedComments = useMemo(() => comments.filter(c => c.analysis), [comments]);
+  const analyzedComments = useMemo(() => comments.filter(c => c.analysis), [comments]) as Comment[];
   const postMap = useMemo(() => new Map(posts.map(p => [p.id, p])), [posts]);
+
+  const narrativeStats = useMemo(() => computeNarrativeCounts(analyzedComments), [analyzedComments]);
 
   const stats = useMemo(() => {
     if (posts.length === 0) return null;
@@ -366,15 +393,7 @@ export default function ResearchPage() {
 
     return {
       tooltip: {},
-      radar: {
-        indicator: DIMENSIONS.map(d => ({ name: getDimensionLabel(d), max: 10 })),
-        shape: 'polygon',
-        splitNumber: 4,
-        axisName: { color: '#94A3B8', fontSize: 10 },
-        splitLine: { lineStyle: { color: '#1E293B' } },
-        splitArea: { areaStyle: { color: ['transparent'] } },
-        axisLine: { lineStyle: { color: '#334155' } },
-      },
+      radar: RADAR_BASE,
       series: [{
         type: 'radar',
         data: [{
@@ -571,15 +590,7 @@ export default function ResearchPage() {
         textStyle: { color: '#94A3B8', fontSize: 11 },
         bottom: 0,
       },
-      radar: {
-        indicator: DIMENSIONS.map(d => ({ name: getDimensionLabel(d), max: 10 })),
-        shape: 'polygon',
-        splitNumber: 4,
-        axisName: { color: '#94A3B8', fontSize: 10 },
-        splitLine: { lineStyle: { color: '#1E293B' } },
-        splitArea: { areaStyle: { color: ['transparent'] } },
-        axisLine: { lineStyle: { color: '#334155' } },
-      },
+      radar: RADAR_BASE,
       series: [{
         type: 'radar',
         data: [
@@ -608,17 +619,10 @@ export default function ResearchPage() {
 
     const insights: string[] = [];
 
-    // Top narrative
-    const narrativeCounts: Record<string, number> = {};
-    for (const c of analyzedComments) {
-      const nt = c.analysis?.narrative_type;
-      if (nt) narrativeCounts[nt] = (narrativeCounts[nt] || 0) + 1;
-    }
-    const sorted = Object.entries(narrativeCounts).sort((a, b) => b[1] - a[1]);
-    if (sorted.length > 0) {
-      const [topNt, topCount] = sorted[0];
-      const pct = ((topCount / analyzedComments.length) * 100).toFixed(1);
-      insights.push(`主导叙事类型为"${getNarrativeLabel(topNt)}"（${pct}%），共 ${topCount} 条评论。`);
+    // Top narrative (reuse shared stats)
+    if (narrativeStats.topType) {
+      const pct = ((narrativeStats.topCount / narrativeStats.total) * 100).toFixed(1);
+      insights.push(`主导叙事类型为"${getNarrativeLabel(narrativeStats.topType)}"（${pct}%），共 ${narrativeStats.topCount} 条评论。`);
     }
 
     // Emotion tendency
@@ -636,7 +640,7 @@ export default function ResearchPage() {
     }
 
     return insights;
-  }, [analyzedComments]);
+  }, [analyzedComments, narrativeStats]);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -686,7 +690,7 @@ export default function ResearchPage() {
       )}
 
       {/* Insight Cards */}
-      <InsightCards posts={posts} analyzed={analyzedComments} />
+      <InsightCards posts={posts} analyzed={analyzedComments} narrativeStats={narrativeStats} />
 
       {/* Charts Grid */}
       {analyzedComments.length > 0 && (

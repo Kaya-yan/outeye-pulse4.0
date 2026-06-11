@@ -1,5 +1,6 @@
 import html2canvas from 'html2canvas';
 import { saveAs } from 'file-saver';
+import type { Comment, Post } from '@/types';
 
 export async function exportChartToPNG(elementId: string, filename: string) {
   const element = document.getElementById(elementId);
@@ -52,4 +53,27 @@ export function exportProjectFile(projectData: unknown, filename: string) {
   const jsonStr = JSON.stringify(projectData, null, 2);
   const blob = new Blob([jsonStr], { type: 'application/octet-stream' });
   saveAs(blob, `${filename}.outeye`);
+}
+
+export function prepareExportData(comments: Comment[], posts: Post[]): Record<string, unknown>[] {
+  const postMap = new Map(posts.map(p => [p.id, p]));
+  return comments.map(c => {
+    const post = postMap.get(c.post_id);
+    return {
+      comment_id: c.id,
+      post_title: post?.title || '',
+      platform: post?.platform || '',
+      text: c.text,
+      likes: c.likes,
+      d1: c.analysis?.d1 || '',
+      d2_valence: c.analysis?.d2_valence || '',
+      d2_arousal: c.analysis?.d2_arousal || '',
+      d3: c.analysis?.d3 || '',
+      d4: c.analysis?.d4 || '',
+      d5: c.analysis?.d5 || '',
+      d6: c.analysis?.d6 || '',
+      narrative_type: c.analysis?.narrative_type || '',
+      risk_level: c.analysis?.risk_level || '',
+    };
+  });
 }

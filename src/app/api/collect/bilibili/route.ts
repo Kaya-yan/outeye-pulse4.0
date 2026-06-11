@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { simpleHash, getSamplingTier } from '@/lib/hash';
+import { simpleHash, getSamplingTier, findExistingHashes } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -41,24 +41,19 @@ export async function POST(request: NextRequest) {
 
     max_comments = Math.min(50000, Math.max(100, Number(max_comments) || 5000));
 
-    // Step 1: Fetch video info
-    const videoInfo = await fetchVideoInfo(bvid);
+    // Fetch video info and resolve project in parallel
+    const [videoInfo, resolvedProjectId] = await Promise.all([
+      fetchVideoInfo(bvid),
+      project_id ? Promise.resolve(project_id) : supabase.from('projects').select('id').limit(1).single().then(r => r.data?.id || null),
+    ]);
+
     if (!videoInfo) {
       return NextResponse.json({ error: '无法获取视频信息，BV号可能无效' }, { status: 400 });
     }
 
+    project_id = resolvedProjectId;
     const aid = videoInfo.aid;
     const sourceUrl = `https://www.bilibili.com/video/${bvid}`;
-
-    // Step 2: Ensure project exists
-    if (!project_id) {
-      const { data: defaultProject } = await supabase
-        .from('projects')
-        .select('id')
-        .limit(1)
-        .single();
-      project_id = defaultProject?.id || null;
-    }
 
     // Step 3: Create or find post record
     let postId: string;
@@ -78,7 +73,7 @@ export async function POST(request: NextRequest) {
           platform: 'bilibili',
           url: sourceUrl,
           title: videoInfo.title,
-          author: videoInfo.owner?.name || '',
+          author_name_mask: videoInfo.owner?.name || '',
           likes: videoInfo.stat?.like || 0,
           collected_by: 'quick-collect',
           is_aigc: false,
@@ -137,13 +132,20 @@ export async function POST(request: NextRequest) {
       .sort((a, b) => b.like - a.like)
       .slice(0, 20);
 
-    for (const parent of topReplies) {
-      try {
-        const subResult = await fetchSubReplies(aid, parent.rpid);
-        parent.replies = subResult;
-        await sleep(300 + Math.random() * 500);
-      } catch {
-        // Sub-reply fetch failure is non-fatal
+    // Batch sub-reply fetching in groups of 5
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < topReplies.length; i += BATCH_SIZE) {
+      const batch = topReplies.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(parent =>
+          fetchSubReplies(aid, parent.rpid).catch(() => [] as BiliReply[])
+        )
+      );
+      for (let j = 0; j < batch.length; j++) {
+        batch[j].replies = results[j];
+      }
+      if (i + BATCH_SIZE < topReplies.length) {
+        await sleep(500 + Math.random() * 500);
       }
     }
 
@@ -152,7 +154,7 @@ export async function POST(request: NextRequest) {
     const importResult = await importComments(flatComments, postId, project_id);
 
     return NextResponse.json({
-      success: true,
+      success: importResult.imported > 0,
       bvid,
       video_title: videoInfo.title,
       video_stats: {
@@ -165,6 +167,7 @@ export async function POST(request: NextRequest) {
       imported: importResult.imported,
       duplicates: importResult.duplicates,
       filtered: importResult.filtered,
+      errors: importResult.errors,
       post_id: postId,
     });
   } catch (err) {
@@ -267,21 +270,8 @@ async function importComments(
   let filtered = 0;
   const errors: string[] = [];
 
-  // Batch check for existing content hashes (chunk to avoid URL length limits)
   const hashes = comments.map(c => simpleHash(`${c.text}|${c.username}|${c.createTime}`));
-  const existingHashes = new Set<string>();
-
-  const CHUNK_SIZE = 500;
-  for (let i = 0; i < hashes.length; i += CHUNK_SIZE) {
-    const chunk = hashes.slice(i, i + CHUNK_SIZE);
-    const { data: rows } = await supabase
-      .from('comments')
-      .select('content_hash')
-      .in('content_hash', chunk);
-    for (const r of rows || []) {
-      if (r.content_hash) existingHashes.add(r.content_hash);
-    }
-  }
+  const existingHashes = await findExistingHashes(supabase, hashes);
 
   // Build insert rows
   const toInsert: Record<string, unknown>[] = [];
@@ -299,10 +289,7 @@ async function importComments(
       project_id: projectId,
       text: c.text,
       likes: c.likes,
-      username: c.username,
-      create_time: c.createTime,
-      platform: 'bilibili',
-      source_id: String(c.rpid),
+      source_tool: 'quick-collect',
       source_url: c.sourceUrl,
       content_hash: hash,
       sampling_tier: getSamplingTier(c.likes),

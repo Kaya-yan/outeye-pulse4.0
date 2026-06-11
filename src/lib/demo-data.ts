@@ -233,42 +233,55 @@ export function generateDemoProject(realProjectId?: string): { project?: Project
   return { project, posts, comments };
 }
 
-// Pre-computed stats for demo
+// Pre-computed stats for demo — single-pass accumulation
 export function computeDemoStats(posts: Post[], comments: Comment[]) {
   const totalPosts = posts.length;
   const totalComments = comments.length;
   const aigcPosts = posts.filter((p) => p.is_aigc).length;
-  const humanPosts = totalPosts - aigcPosts;
-  const sampledComments = comments.filter((c) => c.is_sampled && c.analysis);
-  const highRiskCount = comments.filter((c) => c.analysis?.risk_level === 'high').length;
 
-  const avgDimensions = {
-    d1: sampledComments.reduce((sum, c) => sum + (c.analysis?.d1 || 0), 0) / sampledComments.length,
-    d2_valence: sampledComments.reduce((sum, c) => sum + (c.analysis?.d2_valence || 0), 0) / sampledComments.length,
-    d2_arousal: sampledComments.reduce((sum, c) => sum + (c.analysis?.d2_arousal || 0), 0) / sampledComments.length,
-    d3: sampledComments.reduce((sum, c) => sum + (c.analysis?.d3 || 0), 0) / sampledComments.length,
-    d4: sampledComments.reduce((sum, c) => sum + (c.analysis?.d4 || 0), 0) / sampledComments.length,
-    d5: sampledComments.reduce((sum, c) => sum + (c.analysis?.d5 || 0), 0) / sampledComments.length,
-    d6: sampledComments.reduce((sum, c) => sum + (c.analysis?.d6 || 0), 0) / sampledComments.length,
-  };
+  // Single pass over comments for all stats
+  let sampledCount = 0;
+  let highRiskCount = 0;
+  const dimSums = { d1: 0, d2_valence: 0, d2_arousal: 0, d3: 0, d4: 0, d5: 0, d6: 0 };
+  const narrativeDistribution: Record<string, number> = {};
+  for (const t of NARRATIVE_TYPES) narrativeDistribution[t] = 0;
 
-  const narrativeDistribution = NARRATIVE_TYPES.reduce(
-    (acc, type) => {
-      acc[type] = comments.filter((c) => c.analysis?.narrative_type === type).length;
-      return acc;
-    },
-    {} as Record<string, number>
-  );
+  for (const c of comments) {
+    if (c.analysis?.risk_level === 'high') highRiskCount++;
+    if (c.analysis?.narrative_type) {
+      narrativeDistribution[c.analysis.narrative_type] = (narrativeDistribution[c.analysis.narrative_type] || 0) + 1;
+    }
+    if (c.is_sampled && c.analysis) {
+      sampledCount++;
+      dimSums.d1 += c.analysis.d1 || 0;
+      dimSums.d2_valence += c.analysis.d2_valence || 0;
+      dimSums.d2_arousal += c.analysis.d2_arousal || 0;
+      dimSums.d3 += c.analysis.d3 || 0;
+      dimSums.d4 += c.analysis.d4 || 0;
+      dimSums.d5 += c.analysis.d5 || 0;
+      dimSums.d6 += c.analysis.d6 || 0;
+    }
+  }
+
+  const avgDimensions = sampledCount > 0 ? {
+    d1: dimSums.d1 / sampledCount,
+    d2_valence: dimSums.d2_valence / sampledCount,
+    d2_arousal: dimSums.d2_arousal / sampledCount,
+    d3: dimSums.d3 / sampledCount,
+    d4: dimSums.d4 / sampledCount,
+    d5: dimSums.d5 / sampledCount,
+    d6: dimSums.d6 / sampledCount,
+  } : { d1: 0, d2_valence: 0, d2_arousal: 0, d3: 0, d4: 0, d5: 0, d6: 0 };
 
   return {
     totalPosts,
     totalComments,
     aigcPosts,
-    humanPosts,
-    sampledComments: sampledComments.length,
+    humanPosts: totalPosts - aigcPosts,
+    sampledComments: sampledCount,
     highRiskCount,
     avgDimensions,
     narrativeDistribution,
-    aigcRatio: aigcPosts / totalPosts,
+    aigcRatio: totalPosts > 0 ? aigcPosts / totalPosts : 0,
   };
 }
