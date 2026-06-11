@@ -5,14 +5,16 @@ import { useAppStore } from '@/stores/useAppStore';
 import { computeDemoStats } from '@/lib/demo-data';
 import { cn, getDimensionLabel, getNarrativeLabel } from '@/lib/utils';
 import { exportToWord, exportToExcel, exportToCSV, prepareExportData } from '@/lib/export';
+import { welchTTest } from '@/lib/statistics';
 
 export default function ReportPage() {
   const { posts, comments, currentProject } = useAppStore();
   const [reportType, setReportType] = useState<'weekly' | 'monthly' | 'event' | 'thesis_package'>('thesis_package');
   const [selectedDimensions, setSelectedDimensions] = useState<string[]>([
-    'd1', 'd2_valence', 'd3', 'd5', 'narrative', 'ethics'
+    'd1', 'd2_valence', 'd3', 'd5', 'narrative', 'risk'
   ]);
   const [generatedContent, setGeneratedContent] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
 
   const stats = useMemo(() => {
     if (posts.length === 0) return null;
@@ -23,10 +25,30 @@ export default function ReportPage() {
     return comments.filter(c => c.analysis);
   }, [comments]);
 
-  const generateReport = () => {
-    if (!stats || !currentProject) return;
+  const aigcPostIds = useMemo(() => new Set(posts.filter(p => p.is_aigc).map(p => p.id)), [posts]);
+  const aigcComments = useMemo(() =>
+    analyzedComments.filter(c => aigcPostIds.has(c.post_id)), [analyzedComments, aigcPostIds]);
+  const humanComments = useMemo(() =>
+    analyzedComments.filter(c => !aigcPostIds.has(c.post_id)), [analyzedComments, aigcPostIds]);
 
-    const content = `# ${currentProject.name} - ${reportType === 'thesis_package' ? '论文数据包' : reportType === 'weekly' ? '周报' : '月报'}
+  const tTestResults = useMemo(() => {
+    if (aigcComments.length < 2 || humanComments.length < 2) return null;
+    const dims = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
+    return dims.map(dim => {
+      const s1 = aigcComments.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
+      const s2 = humanComments.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
+      return { dim, ...welchTTest(s1, s2) };
+    });
+  }, [aigcComments, humanComments]);
+
+  const generateReport = () => {
+    if (!stats || !currentProject) {
+      setToast('请先采集评论数据后再生成报告');
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    const content = `# ${currentProject.name} - ${reportType === 'thesis_package' ? '论文数据包' : reportType === 'weekly' ? '周报' : reportType === 'event' ? '事件响应报告' : '月报'}
 
 ## 项目概况
 
@@ -59,6 +81,21 @@ ${selectedDimensions.includes('d3') ? `### 认同层级 (D3)
   - 国家使命认同 (6): ${comments.filter(c => c.analysis?.d3 && c.analysis.d3 >= 5.5).length}
 ` : ''}
 
+${selectedDimensions.includes('d4') ? `### 行为意向 (D4)
+- 均值: ${stats.avgDimensions.d4.toFixed(2)}
+- 理论依据: 计划行为理论 (TPB)
+` : ''}
+
+${selectedDimensions.includes('d5') ? `### 叙事卷入 (D5)
+- 均值: ${stats.avgDimensions.d5.toFixed(2)}
+- 理论依据: Labov 叙事结构理论
+` : ''}
+
+${selectedDimensions.includes('d6') ? `### 伦理风险维度 (D6)
+- 均值: ${stats.avgDimensions.d6.toFixed(2)}
+- 理论依据: 伦理风险评估框架
+` : ''}
+
 ${selectedDimensions.includes('narrative') ? `## 叙事类型分析
 
 理论依据: Labov 叙事结构理论
@@ -70,33 +107,34 @@ ${Object.entries(stats.narrativeDistribution).map(([type, count]) =>
 ).join('\n')}
 ` : ''}
 
-${selectedDimensions.includes('ethics') ? `## 伦理风险分析
+${selectedDimensions.includes('risk') ? `## 风险分布
 
 - 高危评论: ${stats.highRiskCount} 条
 - 高危占比: ${((stats.highRiskCount / comments.length) * 100).toFixed(1)}%
 
-### 风险分布
-- 安全: ${comments.filter(c => c.analysis?.risk_level === 'safe').length}
-- 低危: ${comments.filter(c => c.analysis?.risk_level === 'low').length}
-- 中危: ${comments.filter(c => c.analysis?.risk_level === 'medium').length}
-- 高危: ${comments.filter(c => c.analysis?.risk_level === 'high').length}
+| 风险等级 | 数量 | 占比 |
+|---------|------|------|
+| 安全 | ${comments.filter(c => c.analysis?.risk_level === 'safe').length} | ${(comments.filter(c => c.analysis?.risk_level === 'safe').length / Math.max(comments.length, 1) * 100).toFixed(1)}% |
+| 低危 | ${comments.filter(c => c.analysis?.risk_level === 'low').length} | ${(comments.filter(c => c.analysis?.risk_level === 'low').length / Math.max(comments.length, 1) * 100).toFixed(1)}% |
+| 中危 | ${comments.filter(c => c.analysis?.risk_level === 'medium').length} | ${(comments.filter(c => c.analysis?.risk_level === 'medium').length / Math.max(comments.length, 1) * 100).toFixed(1)}% |
+| 高危 | ${comments.filter(c => c.analysis?.risk_level === 'high').length} | ${(comments.filter(c => c.analysis?.risk_level === 'high').length / Math.max(comments.length, 1) * 100).toFixed(1)}% |
 ` : ''}
 
 ## 统计检验结果
 
-### AIGC vs 人工内容对比
+### AIGC vs 人工内容对比 (Welch's t-test)
 
 | 维度 | AIGC组均值 | 人工组均值 | t值 | p值 | Cohen's d | 显著性 |
 |------|-----------|-----------|-----|-----|-----------|--------|
-| D1 认知加工 | - | - | - | - | - | - |
-| D2 情感效价 | - | - | - | - | - | - |
-| D2 情感唤醒 | - | - | - | - | - | - |
-| D3 认同层级 | - | - | - | - | - | - |
-| D4 行为意向 | - | - | - | - | - | - |
-| D5 叙事卷入 | - | - | - | - | - | - |
-| D6 伦理风险 | - | - | - | - | - | - |
+${tTestResults ? tTestResults.map(r => {
+  const dimLabels: Record<string, string> = {
+    d1: 'D1 认知加工', d2_valence: 'D2 情感效价', d2_arousal: 'D2 情感唤醒',
+    d3: 'D3 认同层级', d4: 'D4 行为意向', d5: 'D5 叙事卷入', d6: 'D6 伦理风险',
+  };
+  return `| ${dimLabels[r.dim] || r.dim} | ${r.mean1.toFixed(3)} | ${r.mean2.toFixed(3)} | ${r.t.toFixed(3)} | ${r.p < 0.001 ? '<0.001' : r.p.toFixed(3)} | ${r.cohensD.toFixed(3)} | ${r.significance} |`;
+}).join('\n') : '| — | — | — | — | — | — | 需要 AIGC 和人工内容各 ≥2 条 |'}
 
-*注: 统计检验数据需在"认同效果实验室"页面运行后自动填充*
+${tTestResults ? `*样本量: AIGC 组 ${aigcComments.length} 条, 人工组 ${humanComments.length} 条*` : '*注: 请确保数据中包含 AIGC 检测结果且两组样本各不少于 2 条*'}
 
 ---
 
@@ -110,13 +148,12 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
   const dimensionOptions = [
     { id: 'd1', label: '认知加工 (D1)' },
     { id: 'd2_valence', label: '情感效价 (D2)' },
-    { id: 'd2_arousal', label: '情感唤醒 (D2)' },
     { id: 'd3', label: '认同层级 (D3)' },
     { id: 'd4', label: '行为意向 (D4)' },
     { id: 'd5', label: '叙事卷入 (D5)' },
     { id: 'd6', label: '伦理风险 (D6)' },
-    { id: 'narrative', label: '叙事类型' },
-    { id: 'ethics', label: '伦理风险' },
+    { id: 'narrative', label: '叙事类型分布' },
+    { id: 'risk', label: '风险等级分布' },
   ];
 
   return (
@@ -149,6 +186,12 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
                   <option value="monthly">月报</option>
                   <option value="event">事件响应</option>
                 </select>
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+                  {reportType === 'thesis_package' && '包含完整维度数据、统计检验结果，适合直接用于论文写作'}
+                  {reportType === 'weekly' && '本周数据概览，适合定期追踪研究进展'}
+                  {reportType === 'monthly' && '月度汇总，适合阶段性研究总结'}
+                  {reportType === 'event' && '针对单一事件的数据快照，适合舆情事件分析'}
+                </p>
               </div>
 
               <div>
@@ -188,7 +231,7 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
             <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">导出选项</h3>
             <div className="space-y-2">
               {[
-                { label: '复制 Markdown', action: () => generatedContent && navigator.clipboard.writeText(generatedContent).then(() => alert('已复制到剪贴板')), disabled: !generatedContent },
+                { label: '复制 Markdown', action: () => generatedContent && navigator.clipboard.writeText(generatedContent).then(() => { setToast('已复制到剪贴板'); setTimeout(() => setToast(null), 2000); }), disabled: !generatedContent },
                 { label: '导出 Word (.docx)', action: () => generatedContent && exportToWord(generatedContent, `${currentProject?.name || 'report'}_报告`), disabled: !generatedContent },
                 { label: '导出 Excel (.xlsx)', action: () => exportToExcel(comments, posts, `${currentProject?.name || 'data'}_评论数据`), disabled: comments.length === 0 },
                 { label: '导出 CSV', action: () => { const data = prepareExportData(comments, posts); exportToCSV(data, `${currentProject?.name || 'data'}_评论数据`); }, disabled: comments.length === 0 },
@@ -229,6 +272,13 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
           </div>
         </div>
       </div>
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm shadow-lg animate-fade-in-up max-w-xs bg-[var(--color-accent-amber)] text-white">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

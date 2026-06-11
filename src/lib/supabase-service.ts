@@ -42,6 +42,32 @@ export async function createProject(project: Partial<Project>): Promise<Project 
   return data;
 }
 
+export async function updateProject(id: string, updates: Partial<Project>): Promise<boolean> {
+  const { error } = await supabase
+    .from('projects')
+    .update(updates)
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error updating project:', error);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteProject(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('projects')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting project:', error);
+    return false;
+  }
+  return true;
+}
+
 export async function fetchPosts(projectId: string): Promise<Post[]> {
   const { data, error } = await supabase
     .from('posts')
@@ -68,6 +94,19 @@ export async function createPost(post: Partial<Post>): Promise<Post | null> {
     return null;
   }
   return data;
+}
+
+export async function deletePost(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('posts')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting post:', error);
+    return false;
+  }
+  return true;
 }
 
 export async function fetchComments(projectId: string, filters?: {
@@ -127,6 +166,19 @@ export async function updateComment(id: string, updates: Partial<Comment>): Prom
 
   if (error) {
     console.error('Error updating comment:', error);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteComment(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('comments')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting comment:', error);
     return false;
   }
   return true;

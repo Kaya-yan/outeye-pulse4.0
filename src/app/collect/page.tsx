@@ -1,28 +1,22 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
 import { cn } from '@/lib/utils';
-import { fetchProjects, fetchPosts, fetchComments, createProject, createPost } from '@/lib/supabase-service';
-
-// ─── Toast ─────────────────────────────────────────────────────
-function useToast() {
-  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 5000);
-    return () => clearTimeout(t);
-  }, [toast]);
-  return { toast, setToast };
-}
+import { createProject, deletePost as deletePostApi } from '@/lib/supabase-service';
 
 // ─── Hero URL Input ────────────────────────────────────────────
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [url, setUrl] = useState('');
   const [collecting, setCollecting] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [result, setResult] = useState<{ imported: number; video_title: string; post_id: string } | null>(null);
-  const { setActiveAnalysisLogId, setAnalysisProgress, currentProject, setPosts, setComments } = useAppStore();
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    imported: number; duplicates: number; video_title: string; post_id: string; analysisTriggered: boolean;
+  } | null>(null);
+  const { setActiveAnalysisLogId, setAnalysisProgress, currentProject } = useAppStore();
+  const router = useRouter();
 
   const detectPlatform = (u: string): 'bilibili' | 'xhs' | null => {
     if (/bilibili\.com|BV\w{10}/i.test(u)) return 'bilibili';
@@ -33,17 +27,16 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const handleCollect = async () => {
     const platform = detectPlatform(url);
     if (!platform) {
-      setStatus('请输入有效的 B站或小红书链接');
+      setError('请输入有效的 B站或小红书链接。示例：\nhttps://www.bilibili.com/video/BV1xx411c7mD');
       return;
     }
 
     setCollecting(true);
-    setStatus('正在连接...');
+    setError(null);
     setResult(null);
 
     try {
       if (platform === 'bilibili') {
-        // One-click Bilibili collection
         const res = await fetch('/api/collect/bilibili', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -51,20 +44,23 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
         });
         const data = await res.json();
         if (data.error) {
-          setStatus(`采集失败: ${data.error}`);
+          setError(mapBilibiliError(data.error));
         } else {
-          setResult({ imported: data.imported, video_title: data.video_title, post_id: data.post_id });
-          setStatus(null);
-          setUrl('');
-          // Reload data
-          onCollected();
-          // Auto-trigger analysis
+          let analysisTriggered = false;
           if (data.imported > 0) {
-            triggerAnalysis(data.post_id);
+            analysisTriggered = await triggerAnalysis(data.post_id);
           }
+          setResult({
+            imported: data.imported,
+            duplicates: data.duplicates || 0,
+            video_title: data.video_title,
+            post_id: data.post_id,
+            analysisTriggered,
+          });
+          setUrl('');
+          onCollected();
         }
       } else {
-        // Xiaohongshu — create agent task
         const res = await fetch('/api/agent/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -72,21 +68,23 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
         });
         const data = await res.json();
         if (data.error) {
-          setStatus(`创建任务失败: ${data.error}`);
+          setError(`创建任务失败: ${data.error}`);
         } else {
-          setStatus('小红书采集任务已创建，正在后台执行...');
+          setResult({
+            imported: 0, duplicates: 0, video_title: '小红书采集任务', post_id: '', analysisTriggered: false,
+          });
           setUrl('');
         }
       }
     } catch {
-      setStatus('网络错误，请重试');
+      setError('网络连接失败，请检查网络后重试');
     } finally {
       setCollecting(false);
     }
   };
 
-  const triggerAnalysis = async (postId?: string) => {
-    if (!currentProject) return;
+  const triggerAnalysis = async (postId?: string): Promise<boolean> => {
+    if (!currentProject) return false;
     try {
       const body: Record<string, unknown> = { projectId: currentProject.id };
       if (postId) body.postId = postId;
@@ -99,10 +97,10 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
       if (data.log_id) {
         setActiveAnalysisLogId(data.log_id);
         setAnalysisProgress({ processed: 0, total: data.total, status: 'processing' });
+        return true;
       }
-    } catch {
-      // Analysis trigger failure is non-fatal
-    }
+    } catch { /* non-fatal */ }
+    return false;
   };
 
   const platform = detectPlatform(url);
@@ -114,7 +112,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           采集评论
         </h2>
         <p className="text-sm text-[var(--color-text-secondary)]">
-          粘贴 B站视频链接或小红书笔记链接，一键采集所有评论并自动启动 AI 分析
+          粘贴 B站视频链接，一键采集所有评论并自动启动 AI 分析
         </p>
       </div>
 
@@ -123,9 +121,9 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           <input
             type="text"
             value={url}
-            onChange={e => { setUrl(e.target.value); setStatus(null); setResult(null); }}
+            onChange={e => { setUrl(e.target.value); setError(null); }}
             onKeyDown={e => e.key === 'Enter' && !collecting && url.trim() && handleCollect()}
-            placeholder="粘贴 B站或小红书链接，如 https://www.bilibili.com/video/BV1xx411c7mD"
+            placeholder="粘贴 B站链接，如 https://www.bilibili.com/video/BV1xx411c7mD"
             className="w-full bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] text-sm outline-none placeholder:text-[var(--color-text-muted)] font-mono px-4 py-3 rounded-lg border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] transition-colors duration-200"
             disabled={collecting}
           />
@@ -152,19 +150,55 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
         </button>
       </div>
 
-      {/* Status messages */}
-      {status && (
-        <div className="mt-4 text-center text-xs text-[var(--color-accent-amber)] animate-fade-in">
-          {status}
+      {/* Error message */}
+      {error && (
+        <div className="mt-4 max-w-2xl mx-auto p-3 rounded-lg bg-[var(--color-accent-red)]/10 border border-[var(--color-accent-red)]/20 animate-fade-in">
+          <p className="text-xs text-[var(--color-accent-red)] whitespace-pre-line">{error}</p>
         </div>
       )}
+
+      {/* Result - persistent */}
       {result && (
-        <div className="mt-4 text-center animate-fade-in-up">
-          <div className="text-sm text-[var(--color-accent-green)] mb-2">
-            采集完成：{result.video_title} — {result.imported} 条评论已入库
-          </div>
-          <div className="text-xs text-[var(--color-text-muted)]">
-            AI 分析已自动启动，完成后可查看可视化图表
+        <div className="mt-4 max-w-2xl mx-auto animate-fade-in-up">
+          <div className="p-4 rounded-lg bg-[var(--color-accent-green)]/10 border border-[var(--color-accent-green)]/20">
+            {result.post_id ? (
+              <>
+                <div className="text-sm text-[var(--color-accent-green)] mb-1">
+                  采集完成：{result.video_title}
+                </div>
+                <div className="text-xs text-[var(--color-text-secondary)] mb-3">
+                  导入 {result.imported} 条评论
+                  {result.duplicates > 0 && <span className="text-[var(--color-accent-amber)]">，跳过 {result.duplicates} 条重复</span>}
+                  {result.analysisTriggered
+                    ? ' · AI 分析已自动启动'
+                    : <span className="text-[var(--color-accent-amber)]"> · 自动分析启动失败，可手动前往分析台</span>
+                  }
+                </div>
+                <div className="flex gap-2">
+                  <Link
+                    href="/analyze"
+                    className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all"
+                  >
+                    查看分析结果
+                  </Link>
+                  <button
+                    onClick={() => setResult(null)}
+                    className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors"
+                  >
+                    继续采集
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm text-[var(--color-accent-green)] mb-1">
+                  {result.video_title}
+                </div>
+                <div className="text-xs text-[var(--color-text-secondary)]">
+                  任务已创建，正在后台执行。完成后数据会自动出现在分析台。
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -174,7 +208,9 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
 
 // ─── Recent Collections ────────────────────────────────────────
 function RecentCollections() {
-  const { posts, comments } = useAppStore();
+  const { posts, comments, removePost } = useAppStore();
+  const router = useRouter();
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   if (posts.length === 0) return null;
 
@@ -182,17 +218,26 @@ function RecentCollections() {
     new Date(b.collected_at).getTime() - new Date(a.collected_at).getTime()
   ).slice(0, 5);
 
+  const handleDelete = async (postId: string) => {
+    const ok = await deletePostApi(postId);
+    if (ok) {
+      removePost(postId);
+    }
+    setConfirmDelete(null);
+  };
+
   return (
     <div className="glass-card p-6 animate-fade-in stagger-2">
       <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">最近采集</h3>
       <div className="space-y-1">
-        {recentPosts.map((post, index) => {
+        {recentPosts.map((post) => {
           const postComments = comments.filter(c => c.post_id === post.id);
           const analyzed = postComments.filter(c => c.analysis).length;
           return (
             <div
               key={post.id}
-              className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-[var(--color-bg-elevated)] transition-colors duration-200"
+              className="group flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-[var(--color-bg-elevated)] transition-colors duration-200 cursor-pointer"
+              onClick={() => router.push('/analyze')}
             >
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-[var(--color-text-primary)] truncate">{post.title || '无标题'}</div>
@@ -207,6 +252,29 @@ function RecentCollections() {
                   {analyzed > 0 && <span className="text-[var(--color-accent-green)] ml-2">· {analyzed} 已分析</span>}
                 </div>
               </div>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <svg className="w-4 h-4 text-[var(--color-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDelete(post.id); }}
+                  className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent-red)] hover:bg-[var(--color-accent-red)]/10 transition-colors"
+                  title="删除"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Delete confirmation inline */}
+              {confirmDelete === post.id && (
+                <div className="absolute right-0 top-0 bottom-0 flex items-center gap-2 pr-3 bg-[var(--color-bg-elevated)] rounded-lg" onClick={e => e.stopPropagation()}>
+                  <span className="text-[10px] text-[var(--color-accent-red)]">确认删除？</span>
+                  <button onClick={() => handleDelete(post.id)} className="px-2 py-1 rounded text-[10px] bg-[var(--color-accent-red)] text-white">确认</button>
+                  <button onClick={() => setConfirmDelete(null)} className="px-2 py-1 rounded text-[10px] text-[var(--color-text-secondary)]">取消</button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -225,23 +293,41 @@ function AdvancedImport() {
         <svg className={cn('w-3.5 h-3.5 transition-transform duration-200', open && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
-        高级采集（CSV 导入、爬虫配置）
+        高级采集（CSV 导入）
       </button>
       {open && (
-        <div className="mt-4 text-xs text-[var(--color-text-secondary)] space-y-2 animate-fade-in">
-          <p>如需使用 MediaCrawler 或 Playwright 脚本批量采集，请前往 <span className="text-[var(--color-accent-blue)]">设置</span> 页面配置本地环境。</p>
-          <p>采集完成后，CSV 文件会自动出现在此处供导入。</p>
+        <div className="mt-4 space-y-3 animate-fade-in">
+          <p className="text-xs text-[var(--color-text-secondary)]">
+            如果你已有 CSV 格式的评论数据，可以通过以下方式导入：
+          </p>
+          <div className="p-3 rounded-lg border border-dashed border-[var(--color-border-active)] bg-[var(--color-bg-deep)]">
+            <p className="text-xs text-[var(--color-text-muted)] text-center">
+              CSV 文件上传功能正在开发中，敬请期待
+            </p>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            也可前往 <Link href="/settings" className="text-[var(--color-accent-blue)] hover:underline">设置页面</Link> 配置本地爬虫环境进行批量采集。
+          </p>
         </div>
       )}
     </div>
   );
 }
 
+// ─── Error mapping ─────────────────────────────────────────────
+function mapBilibiliError(err: string): string {
+  if (err.includes('-352') || err.includes('risk')) return 'B站请求被风控限制，请稍后重试或更换网络';
+  if (err.includes('-400') || err.includes('param')) return '链接格式不正确，请确认是完整的 B站视频链接';
+  if (err.includes('-404') || err.includes('not found')) return '视频不存在或已被删除，请检查链接';
+  if (err.includes('timeout')) return '请求超时，B站服务器响应较慢，请稍后重试';
+  return `采集失败: ${err}`;
+}
+
 // ─── Main Page ──────────────────────────────────────────────────
 export default function CollectPage() {
-  const { setProjects, setCurrentProject, setPosts, setComments, projects } = useAppStore();
-  const { toast, setToast } = useToast();
+  const { setProjects, setCurrentProject, setPosts, setComments } = useAppStore();
   const [pageLoading, setPageLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -254,11 +340,10 @@ export default function CollectPage() {
         setPosts(p);
         setComments(c);
       } else {
-        // Create default project
         const newProject = await createProject({
-          name: '郭永怀数字记忆研究',
+          name: '我的研究项目',
           keyword: '郭永怀',
-          description: '基于郭永怀主题的社交媒体评论量化分析项目',
+          description: '',
           status: 'active',
         });
         if (newProject) {
@@ -266,13 +351,14 @@ export default function CollectPage() {
           setCurrentProject(newProject);
         }
       }
+      setLoadError(null);
     } catch {
-      setToast({ type: 'error', message: '加载项目数据失败' });
+      setLoadError('加载项目数据失败');
     }
-  }, [setProjects, setCurrentProject, setPosts, setComments, setToast]);
+  }, [setProjects, setCurrentProject, setPosts, setComments]);
 
   useEffect(() => {
-    loadData().then(() => setPageLoading(false));
+    loadData().finally(() => setPageLoading(false));
   }, [loadData]);
 
   if (pageLoading) {
@@ -288,6 +374,18 @@ export default function CollectPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* Load error */}
+      {loadError && (
+        <div className="glass-card p-4 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-[var(--color-accent-red)]">{loadError}</p>
+            <button onClick={() => { setPageLoading(true); loadData().finally(() => setPageLoading(false)); }} className="text-xs text-[var(--color-accent-blue)] hover:underline">
+              重试
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Hero: URL Input */}
       <HeroUrlInput onCollected={loadData} />
 
@@ -296,18 +394,6 @@ export default function CollectPage() {
 
       {/* Advanced Import */}
       <AdvancedImport />
-
-      {/* Toast */}
-      {toast && (
-        <div className={cn(
-          'fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm shadow-lg animate-fade-in-up',
-          toast.type === 'success' ? 'bg-[var(--color-accent-green)] text-white' :
-          toast.type === 'error' ? 'bg-[var(--color-accent-red)] text-white' :
-          'bg-[var(--color-accent-blue)] text-white'
-        )}>
-          {toast.message}
-        </div>
-      )}
     </div>
   );
 }

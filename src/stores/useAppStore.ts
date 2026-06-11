@@ -11,14 +11,21 @@ interface AppState {
   projects: Project[];
   setProjects: (projects: Project[]) => void;
   addProject: (project: Project) => void;
+  removeProject: (id: string) => void;
+  updateProject: (project: Project) => void;
 
   // Posts
   posts: Post[];
   setPosts: (posts: Post[]) => void;
+  removePost: (id: string) => void;
 
   // Comments
   comments: Comment[];
   setComments: (comments: Comment[]) => void;
+  removeComment: (id: string) => void;
+
+  // Clear all data
+  clearAll: () => void;
 
   // Analysis
   analysisLog: AnalysisLog | null;
@@ -72,14 +79,43 @@ export const useAppStore = create<AppState>()(
       projects: [],
       setProjects: (projects) => set({ projects }),
       addProject: (project) => set((state) => ({ projects: [...state.projects, project] })),
+      removeProject: (id) => set((state) => {
+        const projects = state.projects.filter(p => p.id !== id);
+        const currentProject = state.currentProject?.id === id
+          ? (projects[0] || null)
+          : state.currentProject;
+        return { projects, currentProject };
+      }),
+      updateProject: (project) => set((state) => ({
+        projects: state.projects.map(p => p.id === project.id ? project : p),
+        currentProject: state.currentProject?.id === project.id ? project : state.currentProject,
+      })),
 
       // Posts
       posts: [],
       setPosts: (posts) => set({ posts }),
+      removePost: (id) => set((state) => ({
+        posts: state.posts.filter(p => p.id !== id),
+        comments: state.comments.filter(c => c.post_id !== id),
+      })),
 
       // Comments
       comments: [],
       setComments: (comments) => set({ comments }),
+      removeComment: (id) => set((state) => ({
+        comments: state.comments.filter(c => c.id !== id),
+      })),
+
+      // Clear all data
+      clearAll: () => set({
+        posts: [],
+        comments: [],
+        projects: [],
+        currentProject: null,
+        analysisLog: null,
+        activeAnalysisLogId: null,
+        analysisProgress: null,
+      }),
 
       // Analysis
       analysisLog: null,
