@@ -24,6 +24,12 @@ interface AppState {
   analysisLog: AnalysisLog | null;
   setAnalysisLog: (log: AnalysisLog | null) => void;
 
+  // Analysis progress (global, persists across pages)
+  activeAnalysisLogId: string | null;
+  setActiveAnalysisLogId: (id: string | null) => void;
+  analysisProgress: { processed: number; total: number; status: string } | null;
+  setAnalysisProgress: (p: { processed: number; total: number; status: string } | null) => void;
+
   // Filters
   filters: FilterState;
   setFilters: (filters: Partial<FilterState>) => void;
@@ -36,6 +42,8 @@ interface AppState {
   togglePresentationMode: () => void;
   introSeen: boolean;
   setIntroSeen: (seen: boolean) => void;
+  terminologyMode: 'academic' | 'plain';
+  setTerminologyMode: (mode: 'academic' | 'plain') => void;
 
   // Selected items
   selectedPostId: string | null;
@@ -77,6 +85,12 @@ export const useAppStore = create<AppState>()(
       analysisLog: null,
       setAnalysisLog: (log) => set({ analysisLog: log }),
 
+      // Analysis progress
+      activeAnalysisLogId: null,
+      setActiveAnalysisLogId: (id) => set({ activeAnalysisLogId: id }),
+      analysisProgress: null,
+      setAnalysisProgress: (p) => set({ analysisProgress: p }),
+
       // Filters
       filters: defaultFilters,
       setFilters: (filters) =>
@@ -90,6 +104,8 @@ export const useAppStore = create<AppState>()(
       togglePresentationMode: () => set((state) => ({ presentationMode: !state.presentationMode })),
       introSeen: false,
       setIntroSeen: (seen) => set({ introSeen: seen }),
+      terminologyMode: 'academic' as const,
+      setTerminologyMode: (mode) => set({ terminologyMode: mode }),
 
       // Selected items
       selectedPostId: null,
@@ -102,6 +118,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         presentationMode: state.presentationMode,
         sidebarCollapsed: state.sidebarCollapsed,
+        terminologyMode: state.terminologyMode,
       }),
       migrate: (persisted: unknown) => {
         // Clean up old introSeen from localStorage

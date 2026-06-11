@@ -77,3 +77,75 @@ export function prepareExportData(comments: Comment[], posts: Post[]): Record<st
     };
   });
 }
+
+export async function exportToWord(reportContent: string, filename: string) {
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } = await import('docx');
+
+  const lines = reportContent.split('\n');
+  const children: InstanceType<typeof Paragraph>[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('# ')) {
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: line.slice(2), bold: true })] }));
+    } else if (line.startsWith('## ')) {
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: line.slice(3), bold: true })] }));
+    } else if (line.startsWith('### ')) {
+      children.push(new Paragraph({ heading: HeadingLevel.HEADING_3, children: [new TextRun({ text: line.slice(4), bold: true })] }));
+    } else if (line.startsWith('- **')) {
+      const match = line.match(/^- \*\*(.+?)\*\*:?\s*(.*)$/);
+      if (match) {
+        children.push(new Paragraph({ children: [new TextRun({ text: match[1], bold: true }), new TextRun({ text: ': ' + match[2] })] }));
+      } else {
+        children.push(new Paragraph({ children: [new TextRun({ text: line.slice(2) })] }));
+      }
+    } else if (line.startsWith('- ')) {
+      children.push(new Paragraph({ children: [new TextRun({ text: line.slice(2) })], bullet: { level: 0 } }));
+    } else if (line.startsWith('|')) {
+      // Skip table markdown rows (handled separately if needed)
+      if (line.includes('---')) continue;
+      const cells = line.split('|').filter(c => c.trim()).map(c => c.trim());
+      if (cells.length > 0) {
+        children.push(new Paragraph({ children: [new TextRun({ text: cells.join(' | ') })] }));
+      }
+    } else if (line.trim()) {
+      children.push(new Paragraph({ children: [new TextRun({ text: line })] }));
+    }
+  }
+
+  const doc = new Document({ sections: [{ children }] });
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, `${filename}.docx`);
+}
+
+export async function exportToExcel(comments: Comment[], posts: Post[], filename: string) {
+  const XLSX = await import('xlsx');
+
+  const columnMap: Record<string, string> = {
+    comment_id: '评论ID',
+    post_title: '帖子标题',
+    platform: '平台',
+    text: '评论内容',
+    likes: '点赞数',
+    d1: '认知加工(D1)',
+    d2_valence: '情感效价(D2)',
+    d2_arousal: '情感唤醒(D2)',
+    d3: '认同层级(D3)',
+    d4: '行为意向(D4)',
+    d5: '叙事卷入(D5)',
+    d6: '伦理风险(D6)',
+    narrative_type: '叙事类型',
+    risk_level: '风险等级',
+  };
+
+  const data = prepareExportData(comments, posts);
+  const headers = Object.keys(columnMap);
+  const rows = data.map(row => headers.map(h => row[h] ?? ''));
+
+  const ws = XLSX.utils.aoa_to_sheet([headers.map(h => columnMap[h]), ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '评论数据');
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  saveAs(blob, `${filename}.xlsx`);
+}

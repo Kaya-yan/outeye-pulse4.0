@@ -205,12 +205,17 @@ export default function P0Page() {
     setTasksLoading(true);
     try {
       const { supabase } = await import('@/lib/supabase');
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('task_queue')
         .select('id,platform,target_url,status,max_comments,created_at,error_message')
         .order('created_at', { ascending: false })
         .limit(20);
-      setAgentTasks(data || []);
+      if (error) {
+        // task_queue table may not exist yet — silently skip
+        setAgentTasks([]);
+      } else {
+        setAgentTasks(data || []);
+      }
     } catch {
       // task_queue table may not exist yet
     } finally {

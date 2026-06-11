@@ -76,7 +76,10 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      const msg = error.message.includes('task_queue')
+        ? '任务队列表尚未创建，请在 Supabase SQL Editor 中执行 005_create_task_queue.sql 迁移'
+        : error.message;
+      return NextResponse.json({ error: msg }, { status: 500 });
     }
 
     return NextResponse.json({ task: data, success: true });

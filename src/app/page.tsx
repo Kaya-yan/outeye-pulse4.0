@@ -7,7 +7,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/p0');
+    router.replace('/collect');
   }, [router]);
 
   return (
