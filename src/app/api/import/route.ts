@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { createClient } from '@supabase/supabase-js';
 import Papa from 'papaparse';
+import { simpleHash } from '@/lib/hash';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -25,15 +26,6 @@ function parseCsvSafe(content: string): Record<string, string>[] {
   return (result.data as Record<string, string>[]).filter(row =>
     Object.values(row).some(v => v && String(v).trim())
   );
-}
-
-function simpleHash(input: string): string {
-  let hash = 0;
-  for (let i = 0; i < input.length; i++) {
-    hash = ((hash << 5) - hash) + input.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
 }
 
 function cleanRows(rows: Record<string, string>[], existingHashes: Set<string>) {

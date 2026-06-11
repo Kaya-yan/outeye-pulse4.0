@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
+import { simpleHash, getSamplingTier } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -218,17 +219,4 @@ function extractTitleFromUrl(url: string, platform: string): string {
     return m ? `小红书笔记 ${m[1]}` : '小红书笔记';
   }
   return `${platform} 内容`;
-}
-
-function getSamplingTier(likes: number): string {
-  return likes >= 100 ? 'high' : likes >= 10 ? 'mid' : 'low';
-}
-
-function simpleHash(input: string): string {
-  let hash = 0;
-  for (let i = 0; i < input.length; i++) {
-    hash = (hash << 5) - hash + input.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
 }

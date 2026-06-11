@@ -139,15 +139,18 @@ export default function P0Page() {
   // ─── Env detection ────────────────────────────────────────────
   const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
   const [envLoading, setEnvLoading] = useState(false);
+  const [envError, setEnvError] = useState<string | null>(null);
 
   const checkEnv = useCallback(async () => {
     setEnvLoading(true);
+    setEnvError(null);
     try {
       const res = await fetch('/api/env-check');
       const data = await res.json();
       setEnvStatus(data);
     } catch {
       setEnvStatus(null);
+      setEnvError('环境检测失败，请检查本地服务是否运行');
     } finally {
       setEnvLoading(false);
     }
@@ -166,15 +169,18 @@ export default function P0Page() {
   // ─── File scan ────────────────────────────────────────────────
   const [csvFiles, setCsvFiles] = useState<CsvFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
 
   const scanFiles = useCallback(async () => {
     setFilesLoading(true);
+    setFilesError(null);
     try {
       const res = await fetch('/api/files');
       const data = await res.json();
       setCsvFiles(data.files || []);
     } catch {
       setCsvFiles([]);
+      setFilesError('文件扫描失败，请检查本地服务是否运行');
     } finally {
       setFilesLoading(false);
     }
@@ -263,18 +269,22 @@ export default function P0Page() {
   }, [addProject, setCurrentProject, setPosts, setComments]);
 
   const loadFromSupabase = useCallback(async () => {
-    const projects = await fetchProjects();
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const validProjects = projects.filter(p => uuidRegex.test(p.id));
-    if (validProjects.length > 0) {
-      setProjects(validProjects);
-      const project = validProjects[0];
-      setCurrentProject(project);
-      const [postsData, commentsData] = await Promise.all([fetchPosts(project.id), fetchComments(project.id)]);
-      setPosts(postsData);
-      setComments(commentsData);
-    } else if (!demoLoaded) {
-      loadDemoProject();
+    try {
+      const projects = await fetchProjects();
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const validProjects = projects.filter(p => uuidRegex.test(p.id));
+      if (validProjects.length > 0) {
+        setProjects(validProjects);
+        const project = validProjects[0];
+        setCurrentProject(project);
+        const [postsData, commentsData] = await Promise.all([fetchPosts(project.id), fetchComments(project.id)]);
+        setPosts(postsData);
+        setComments(commentsData);
+      } else if (!demoLoaded) {
+        loadDemoProject();
+      }
+    } catch {
+      setToast({ type: 'error', message: '加载项目数据失败，请检查网络连接' });
     }
   }, [demoLoaded, loadDemoProject, setProjects, setCurrentProject, setPosts, setComments]);
 
@@ -306,6 +316,12 @@ export default function P0Page() {
           setAnalysisLogs(prev => {
             const idx = prev.findIndex(l => l.id === data.log.id);
             if (idx >= 0) {
+              const existing = prev[idx];
+              if (existing.processed_comments === data.log.processed_comments
+                  && existing.status === data.log.status
+                  && existing.progress_percent === data.log.progress_percent) {
+                return prev;
+              }
               const updated = [...prev];
               updated[idx] = data.log;
               return updated;
@@ -510,6 +526,12 @@ export default function P0Page() {
             <p className="text-xs text-[#94A3B8]">B站 API 拦截采集</p>
           </div>
         </div>
+
+        {envError && (
+          <div className="bg-[#EF4444]/5 border border-[#EF4444]/20 rounded-lg p-3 mb-4">
+            <p className="text-xs text-[#F87171]">{envError}</p>
+          </div>
+        )}
 
         {envStatus && !envStatus.allReady && (
           <div className="bg-[#F59E0B]/5 border border-[#F59E0B]/20 rounded-lg p-3 mb-4">
@@ -836,7 +858,9 @@ export default function P0Page() {
 
         {csvFiles.length === 0 ? (
           <div className="text-center py-6 text-[#64748B] text-sm">
-            {filesLoading ? '扫描中...' : isLocal ? '未找到 CSV 文件。请先运行 MediaCrawler 或 Playwright 脚本采集数据。' : '线上环境无法扫描本地文件。请在本地运行采集后，通过上方导入功能上传 CSV。'}
+            {filesLoading ? '扫描中...' : filesError ? (
+              <span className="text-[#F87171]">{filesError}</span>
+            ) : isLocal ? '未找到 CSV 文件。请先运行 MediaCrawler 或 Playwright 脚本采集数据。' : '线上环境无法扫描本地文件。请在本地运行采集后，通过上方导入功能上传 CSV。'}
           </div>
         ) : (
           <div className="space-y-2">
