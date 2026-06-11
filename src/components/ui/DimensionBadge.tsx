@@ -24,14 +24,14 @@ export function DimensionBadge({ dim, value, showValue = false, className }: Dim
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
     >
-      <span className="text-xs text-[#94A3B8] border-b border-dotted border-[#475569]">
+      <span className="text-xs text-[var(--color-text-secondary)] border-b border-dotted border-[var(--color-border-active)]">
         {label}
       </span>
       {showValue && value != null && (
-        <span className="text-xs text-[#60A5FA] font-mono">{typeof value === 'number' ? value.toFixed(1) : value}</span>
+        <span className="text-xs text-[var(--color-accent-blue)] font-mono">{typeof value === 'number' ? value.toFixed(1) : value}</span>
       )}
       {showTooltip && explanation && (
-        <span className="absolute bottom-full left-0 mb-2 z-50 w-64 p-3 bg-[#1E293B] border border-[#334155] rounded-lg text-xs text-[#CBD5E1] leading-relaxed shadow-lg">
+        <span className="absolute bottom-full left-0 mb-2 z-50 w-64 p-3 bg-[var(--color-bg-elevated)] border border-[var(--color-border-active)] rounded-lg text-xs text-[var(--color-text-secondary)] leading-relaxed shadow-lg">
           {explanation}
         </span>
       )}

@@ -82,27 +82,30 @@ function OverviewTab({ posts, comments, analyzed, stats }: { posts: any[]; comme
           { label: '评论数', value: comments.length, unit: '条' },
           { label: '已分析', value: analyzed.length, unit: '条' },
           { label: '高风险', value: analyzed.filter(c => c.analysis?.risk_level === 'high').length, unit: '条' },
-        ].map(kpi => (
-          <div key={kpi.label} className="glass-card p-4 text-center">
-            <div className="text-2xl font-bold text-[#F8FAFC] font-mono">{formatNumber(kpi.value)}</div>
-            <div className="text-[10px] text-[#64748B] mt-1">{kpi.label}</div>
+        ].map((kpi, i) => (
+          <div
+            key={kpi.label}
+            className={cn('glass-card p-4 text-center animate-fade-in-up', `stagger-${i + 1}`)}
+          >
+            <div className="text-2xl font-bold text-[var(--color-text-primary)] font-mono">{formatNumber(kpi.value)}</div>
+            <div className="text-[10px] text-[var(--color-text-muted)] mt-1">{kpi.label}</div>
           </div>
         ))}
       </div>
 
       {/* Findings */}
       {findings.length > 0 && (
-        <div className="finding-card p-5">
-          <h3 className="text-sm font-semibold text-[#F8FAFC] mb-3" style={{ fontFamily: 'var(--font-serif)' }}>
+        <div className="finding-card p-5 animate-fade-in-up stagger-5">
+          <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3" style={{ fontFamily: 'var(--font-serif)' }}>
             研究发现
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {findings.map((f, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[#8B5CF6]/10 text-[#A78BFA] text-[10px] flex items-center justify-center font-mono mt-0.5">
+              <div key={i} className="flex items-start gap-3">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[var(--color-accent-purple)]/10 text-[var(--color-accent-purple)] text-[10px] flex items-center justify-center font-mono mt-0.5">
                   {i + 1}
                 </span>
-                <p className="text-xs text-[#CBD5E1] leading-relaxed">{f}</p>
+                <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{f}</p>
               </div>
             ))}
           </div>
@@ -111,17 +114,17 @@ function OverviewTab({ posts, comments, analyzed, stats }: { posts: any[]; comme
 
       {/* Analysis pending */}
       {posts.length > 0 && analyzed.length === 0 && comments.length > 0 && (
-        <div className="glass-card p-6 text-center">
-          <p className="text-sm text-[#F59E0B] mb-2">数据已采集，AI 分析正在自动进行</p>
-          <p className="text-xs text-[#64748B]">分析完成后即可查看可视化图表</p>
+        <div className="glass-card p-6 text-center animate-fade-in">
+          <p className="text-sm text-[var(--color-accent-amber)] mb-2">数据已采集，AI 分析正在自动进行</p>
+          <p className="text-xs text-[var(--color-text-muted)]">分析完成后即可查看可视化图表</p>
         </div>
       )}
 
       {/* Empty state */}
       {posts.length === 0 && (
-        <div className="glass-card p-8 text-center">
-          <p className="text-sm text-[#94A3B8] mb-2">暂无数据</p>
-          <p className="text-xs text-[#64748B]">前往采集台粘贴链接开始采集</p>
+        <div className="glass-card p-8 text-center animate-fade-in">
+          <p className="text-sm text-[var(--color-text-secondary)] mb-2">暂无数据</p>
+          <p className="text-xs text-[var(--color-text-muted)]">前往采集台粘贴链接开始采集</p>
         </div>
       )}
     </div>
@@ -160,8 +163,8 @@ function EmotionTab({ analyzed }: { analyzed: any[] }) {
         <div className="chart-title">情感空间分布</div>
         <div className="chart-subtitle">Russell 情感环状模型：效价 × 唤醒度（点大小=认同层级）</div>
         <ReactECharts option={scatterOption} style={{ height: 400 }} />
-        <div className="mt-3 p-3 bg-[#030712] rounded-lg border border-[#1E293B]">
-          <p className="text-xs text-[#94A3B8] leading-relaxed">
+        <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
             {getChartInterpretation('emotion-scatter')}
           </p>
         </div>
@@ -225,16 +228,16 @@ function NarrativeTab({ analyzed, posts }: { analyzed: any[]; posts: any[] }) {
           <div className="chart-title">叙事类型分布</div>
           <div className="chart-subtitle">基于 Labov 叙事分析框架的六类叙事编码</div>
           <ReactECharts option={pieOption} style={{ height: 350 }} />
-          <div className="mt-3 p-3 bg-[#030712] rounded-lg border border-[#1E293B]">
-            <p className="text-xs text-[#94A3B8] leading-relaxed">{getChartInterpretation('narrative-pie')}</p>
+          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{getChartInterpretation('narrative-pie')}</p>
           </div>
         </div>
         <div className="chart-academic">
           <div className="chart-title">平台 × 叙事类型</div>
           <div className="chart-subtitle">内环=平台，外环=叙事类型</div>
           <ReactECharts option={sunburstOption} style={{ height: 350 }} />
-          <div className="mt-3 p-3 bg-[#030712] rounded-lg border border-[#1E293B]">
-            <p className="text-xs text-[#94A3B8] leading-relaxed">{getChartInterpretation('sunburst')}</p>
+          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{getChartInterpretation('sunburst')}</p>
           </div>
         </div>
       </div>
@@ -283,18 +286,18 @@ function RiskTab({ analyzed }: { analyzed: any[] }) {
           <div className="chart-title">伦理风险分布</div>
           <div className="chart-subtitle">基于媒介伦理框架的风险等级划分</div>
           <ReactECharts option={donutOption} style={{ height: 350 }} />
-          <div className="mt-3 p-3 bg-[#030712] rounded-lg border border-[#1E293B]">
-            <p className="text-xs text-[#94A3B8] leading-relaxed">{getChartInterpretation('risk-donut')}</p>
+          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{getChartInterpretation('risk-donut')}</p>
           </div>
         </div>
         <div className="glass-card p-5">
           <div className="chart-title mb-3">高风险评论（前 20 条）</div>
           {highRiskComments.length === 0 ? (
-            <p className="text-xs text-[#10B981]">未检测到高风险评论</p>
+            <p className="text-xs text-[var(--color-accent-green)]">未检测到高风险评论</p>
           ) : (
             <div className="space-y-2 max-h-[300px] overflow-y-auto">
               {highRiskComments.map(c => (
-                <div key={c.id} className="p-2 bg-[#EF4444]/5 border border-[#EF4444]/10 rounded text-xs text-[#94A3B8]">
+                <div key={c.id} className="p-2.5 bg-[var(--color-accent-red)]/5 border border-[var(--color-accent-red)]/10 rounded-lg text-xs text-[var(--color-text-secondary)]">
                   {c.text?.slice(0, 100)}...
                 </div>
               ))}
@@ -344,8 +347,8 @@ function CompareTab({ analyzed, posts, getDimLabel }: { analyzed: any[]; posts: 
         <div className="chart-title">AIGC vs 人工内容</div>
         <div className="chart-subtitle">AI 生成内容与人工内容的六维对比</div>
         <ReactECharts option={radarOption} style={{ height: 400 }} />
-        <div className="mt-3 p-3 bg-[#030712] rounded-lg border border-[#1E293B]">
-          <p className="text-xs text-[#94A3B8] leading-relaxed">{getChartInterpretation('aigc-radar')}</p>
+        <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{getChartInterpretation('aigc-radar')}</p>
         </div>
       </div>
     </div>
@@ -355,8 +358,8 @@ function CompareTab({ analyzed, posts, getDimLabel }: { analyzed: any[]; posts: 
 // ─── Empty State ────────────────────────────────────────────────
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="glass-card p-8 text-center">
-      <p className="text-sm text-[#94A3B8]">{text}</p>
+    <div className="glass-card p-8 text-center animate-fade-in">
+      <p className="text-sm text-[var(--color-text-secondary)]">{text}</p>
     </div>
   );
 }
@@ -392,9 +395,9 @@ export default function AnalyzePage() {
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="h-8 w-48 bg-[#1E293B] rounded animate-pulse" />
+        <div className="h-8 w-48 skeleton-shimmer rounded" />
         <div className="grid grid-cols-4 gap-4">
-          {[1,2,3,4].map(i => <div key={i} className="glass-card p-4 h-24 animate-pulse" />)}
+          {[1,2,3,4].map(i => <div key={i} className="glass-card p-4 h-24 skeleton-shimmer" />)}
         </div>
       </div>
     );
@@ -403,22 +406,22 @@ export default function AnalyzePage() {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between animate-fade-in">
         <div>
-          <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-serif)' }}>
+          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-serif)' }}>
             分析台
           </h1>
-          <p className="text-sm text-[#94A3B8] mt-1">
+          <p className="text-sm text-[var(--color-text-secondary)] mt-1">
             {posts.length} 篇内容 · {comments.length} 条评论 · {analyzedComments.length} 已分析
           </p>
         </div>
         <button
           onClick={() => setTerminologyMode(terminologyMode === 'academic' ? 'plain' : 'academic')}
           className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all',
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all duration-200',
             terminologyMode === 'plain'
-              ? 'bg-[#F59E0B]/10 text-[#FCD34D] border border-[#F59E0B]/20'
-              : 'bg-[#111827] text-[#94A3B8] border border-[#1E293B] hover:border-[#334155]'
+              ? 'bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)] border border-[var(--color-accent-amber)]/20'
+              : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)]'
           )}
         >
           {terminologyMode === 'plain' ? '通俗模式' : '学术模式'}
@@ -426,16 +429,16 @@ export default function AnalyzePage() {
       </div>
 
       {/* Tab Bar */}
-      <div className="flex gap-1 bg-[#0B1221] rounded-lg p-1 border border-[#1E293B] overflow-x-auto">
+      <div className="flex gap-1 bg-[var(--color-bg-card)] rounded-lg p-1 border border-[var(--color-border-subtle)] overflow-x-auto animate-fade-in stagger-1">
         {TABS.map(tab => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              'flex-shrink-0 px-4 py-2 rounded-md text-sm transition-all',
+              'flex-shrink-0 px-4 py-2 rounded-md text-sm transition-all duration-200',
               activeTab === tab.key
-                ? 'bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20'
-                : 'text-[#64748B] hover:text-[#94A3B8] border border-transparent'
+                ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] shadow-sm'
+                : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
             )}
           >
             {tab.label}
@@ -444,11 +447,13 @@ export default function AnalyzePage() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} stats={stats} />}
-      {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} />}
-      {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} />}
-      {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}
-      {activeTab === 'compare' && <CompareTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} />}
+      <div className="animate-fade-in">
+        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} stats={stats} />}
+        {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} />}
+        {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} />}
+        {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}
+        {activeTab === 'compare' && <CompareTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} />}
+      </div>
     </div>
   );
 }

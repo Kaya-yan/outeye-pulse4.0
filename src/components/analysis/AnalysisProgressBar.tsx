@@ -50,21 +50,24 @@ export function AnalysisProgressBar() {
     : 0;
 
   return (
-    <div className="fixed top-14 left-0 right-0 z-40 bg-[#0B1221] border-b border-[#1E293B] px-6 py-2">
+    <div className="fixed top-14 left-0 right-0 z-40 bg-[var(--color-bg-card)] border-b border-[var(--color-border-subtle)] px-6 py-2 animate-fade-in">
       <div className="max-w-7xl mx-auto flex items-center gap-4">
-        <span className="text-xs text-[#94A3B8] flex-shrink-0">
+        <span className="text-xs text-[var(--color-text-secondary)] flex-shrink-0">
           正在分析 {analysisProgress.total} 条评论...
         </span>
-        <div className="flex-1 h-2 bg-[#1E293B] rounded-full overflow-hidden">
+        <div className="flex-1 h-1.5 bg-[var(--color-bg-deep)] rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] rounded-full transition-all duration-500"
-            style={{ width: `${pct}%` }}
+            className="h-full rounded-full transition-all duration-500"
+            style={{
+              width: `${pct}%`,
+              background: `linear-gradient(90deg, var(--color-accent-blue), var(--color-accent-purple))`
+            }}
           />
         </div>
-        <span className="text-xs text-[#60A5FA] font-mono flex-shrink-0">
+        <span className="text-xs text-[var(--color-accent-blue)] font-mono flex-shrink-0">
           {pct}%
         </span>
-        <span className="text-xs text-[#64748B] flex-shrink-0">
+        <span className="text-xs text-[var(--color-text-muted)] flex-shrink-0">
           {analysisProgress.processed}/{analysisProgress.total}
         </span>
       </div>

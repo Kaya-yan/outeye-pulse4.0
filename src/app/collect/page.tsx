@@ -108,12 +108,12 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const platform = detectPlatform(url);
 
   return (
-    <div className="glass-card p-8">
+    <div className="glass-card p-8 animate-fade-in">
       <div className="text-center mb-6">
-        <h2 className="text-2xl font-bold text-[#F8FAFC] mb-2" style={{ fontFamily: 'var(--font-serif)' }}>
+        <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-2" style={{ fontFamily: 'var(--font-serif)' }}>
           采集评论
         </h2>
-        <p className="text-sm text-[#94A3B8]">
+        <p className="text-sm text-[var(--color-text-secondary)]">
           粘贴 B站视频链接或小红书笔记链接，一键采集所有评论并自动启动 AI 分析
         </p>
       </div>
@@ -126,13 +126,13 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
             onChange={e => { setUrl(e.target.value); setStatus(null); setResult(null); }}
             onKeyDown={e => e.key === 'Enter' && !collecting && url.trim() && handleCollect()}
             placeholder="粘贴 B站或小红书链接，如 https://www.bilibili.com/video/BV1xx411c7mD"
-            className="w-full bg-[#030712] text-[#F8FAFC] text-sm outline-none placeholder:text-[#475569] font-mono px-4 py-3 rounded-lg border border-[#1E293B] focus:border-[#3B82F6] transition-colors"
+            className="w-full bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] text-sm outline-none placeholder:text-[var(--color-text-muted)] font-mono px-4 py-3 rounded-lg border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] transition-colors duration-200"
             disabled={collecting}
           />
           {platform && (
             <span className={cn(
-              'absolute right-3 top-1/2 -translate-y-1/2 text-[10px] px-2 py-0.5 rounded',
-              platform === 'bilibili' ? 'bg-[#00A1D6]/20 text-[#00A1D6]' : 'bg-[#FE2C55]/20 text-[#FE2C55]'
+              'absolute right-3 top-1/2 -translate-y-1/2 text-[10px] px-2 py-0.5 rounded animate-fade-in',
+              platform === 'bilibili' ? 'bg-[#00A1D6]/15 text-[#00A1D6]' : 'bg-[#FE2C55]/15 text-[#FE2C55]'
             )}>
               {platform === 'bilibili' ? 'B站' : '小红书'}
             </span>
@@ -142,10 +142,10 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           onClick={handleCollect}
           disabled={collecting || !url.trim()}
           className={cn(
-            'px-6 py-3 rounded-lg text-sm font-medium transition-all flex-shrink-0',
+            'px-6 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex-shrink-0',
             collecting
-              ? 'bg-[#3B82F6]/20 text-[#60A5FA]'
-              : 'bg-[#3B82F6] text-white hover:bg-[#2563EB]'
+              ? 'bg-[var(--color-accent-blue)]/15 text-[var(--color-accent-blue-glow)]'
+              : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
           )}
         >
           {collecting ? '采集中...' : '开始采集'}
@@ -154,16 +154,16 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
 
       {/* Status messages */}
       {status && (
-        <div className="mt-4 text-center text-xs text-[#F59E0B]">
+        <div className="mt-4 text-center text-xs text-[var(--color-accent-amber)] animate-fade-in">
           {status}
         </div>
       )}
       {result && (
-        <div className="mt-4 text-center">
-          <div className="text-sm text-[#10B981] mb-2">
+        <div className="mt-4 text-center animate-fade-in-up">
+          <div className="text-sm text-[var(--color-accent-green)] mb-2">
             采集完成：{result.video_title} — {result.imported} 条评论已入库
           </div>
-          <div className="text-xs text-[#64748B]">
+          <div className="text-xs text-[var(--color-text-muted)]">
             AI 分析已自动启动，完成后可查看可视化图表
           </div>
         </div>
@@ -183,17 +183,20 @@ function RecentCollections() {
   ).slice(0, 5);
 
   return (
-    <div className="glass-card p-6">
-      <h3 className="text-sm font-semibold text-[#F8FAFC] mb-4">最近采集</h3>
-      <div className="space-y-3">
-        {recentPosts.map(post => {
+    <div className="glass-card p-6 animate-fade-in stagger-2">
+      <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">最近采集</h3>
+      <div className="space-y-1">
+        {recentPosts.map((post, index) => {
           const postComments = comments.filter(c => c.post_id === post.id);
           const analyzed = postComments.filter(c => c.analysis).length;
           return (
-            <div key={post.id} className="flex items-center justify-between py-2 border-b border-[#1E293B] last:border-0">
+            <div
+              key={post.id}
+              className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-[var(--color-bg-elevated)] transition-colors duration-200"
+            >
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-[#F8FAFC] truncate">{post.title || '无标题'}</div>
-                <div className="text-[10px] text-[#64748B] mt-0.5">
+                <div className="text-sm text-[var(--color-text-primary)] truncate">{post.title || '无标题'}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
                   <span className={cn(
                     'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] mr-2',
                     post.platform === 'bilibili' ? 'bg-[#00A1D6]/10 text-[#00A1D6]' : 'bg-[#FE2C55]/10 text-[#FE2C55]'
@@ -201,7 +204,7 @@ function RecentCollections() {
                     {post.platform === 'bilibili' ? 'B站' : '小红书'}
                   </span>
                   {postComments.length} 条评论
-                  {analyzed > 0 && <span className="text-[#10B981] ml-2">· {analyzed} 已分析</span>}
+                  {analyzed > 0 && <span className="text-[var(--color-accent-green)] ml-2">· {analyzed} 已分析</span>}
                 </div>
               </div>
             </div>
@@ -217,16 +220,16 @@ function AdvancedImport() {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="glass-card p-6">
-      <button onClick={() => setOpen(p => !p)} className="flex items-center gap-2 text-sm text-[#64748B] hover:text-[#94A3B8] transition-colors">
-        <svg className={cn('w-3.5 h-3.5 transition-transform', open && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <div className="glass-card p-6 animate-fade-in stagger-3">
+      <button onClick={() => setOpen(p => !p)} className="flex items-center gap-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors duration-200">
+        <svg className={cn('w-3.5 h-3.5 transition-transform duration-200', open && 'rotate-90')} fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
         高级采集（CSV 导入、爬虫配置）
       </button>
       {open && (
-        <div className="mt-4 text-xs text-[#94A3B8] space-y-2">
-          <p>如需使用 MediaCrawler 或 Playwright 脚本批量采集，请前往 <span className="text-[#60A5FA]">设置</span> 页面配置本地环境。</p>
+        <div className="mt-4 text-xs text-[var(--color-text-secondary)] space-y-2 animate-fade-in">
+          <p>如需使用 MediaCrawler 或 Playwright 脚本批量采集，请前往 <span className="text-[var(--color-accent-blue)]">设置</span> 页面配置本地环境。</p>
           <p>采集完成后，CSV 文件会自动出现在此处供导入。</p>
         </div>
       )}
@@ -276,8 +279,8 @@ export default function CollectPage() {
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="glass-card p-8">
-          <div className="h-8 w-48 bg-[#1E293B] rounded animate-pulse mx-auto mb-4" />
-          <div className="h-12 bg-[#1E293B] rounded animate-pulse" />
+          <div className="h-8 w-48 skeleton-shimmer rounded mx-auto mb-4" />
+          <div className="h-12 skeleton-shimmer rounded" />
         </div>
       </div>
     );
@@ -297,10 +300,10 @@ export default function CollectPage() {
       {/* Toast */}
       {toast && (
         <div className={cn(
-          'fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm shadow-lg animate-fade-in',
-          toast.type === 'success' ? 'bg-[#10B981] text-white' :
-          toast.type === 'error' ? 'bg-[#EF4444] text-white' :
-          'bg-[#3B82F6] text-white'
+          'fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm shadow-lg animate-fade-in-up',
+          toast.type === 'success' ? 'bg-[var(--color-accent-green)] text-white' :
+          toast.type === 'error' ? 'bg-[var(--color-accent-red)] text-white' :
+          'bg-[var(--color-accent-blue)] text-white'
         )}>
           {toast.message}
         </div>

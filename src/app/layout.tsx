@@ -20,7 +20,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-full bg-[#030712] text-[#F8FAFC]">
+      <body className="min-h-full bg-[var(--color-bg-deep)] text-[var(--color-text-primary)]">
         <AppShell>{children}</AppShell>
       </body>
     </html>

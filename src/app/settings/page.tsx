@@ -17,8 +17,8 @@ interface EnvStatus {
 
 const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
   <div className="flex items-center gap-2">
-    <span className={cn('w-2.5 h-2.5 rounded-full', ok ? 'bg-[#10B981]' : 'bg-[#EF4444]')} />
-    <span className={cn('text-sm', ok ? 'text-[#10B981]' : 'text-[#EF4444]')}>{label}</span>
+    <span className={cn('w-2 h-2 rounded-full', ok ? 'bg-[var(--color-accent-green)]' : 'bg-[var(--color-accent-red)]')} />
+    <span className={cn('text-sm', ok ? 'text-[var(--color-accent-green)]' : 'text-[var(--color-accent-red)]')}>{label}</span>
   </div>
 );
 
@@ -70,16 +70,16 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-serif)' }}>设置</h1>
-        <p className="text-sm text-[#94A3B8] mt-1">环境配置、数据管理</p>
+      <div className="animate-fade-in">
+        <h1 className="text-2xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-serif)' }}>设置</h1>
+        <p className="text-sm text-[var(--color-text-secondary)] mt-1">环境配置、数据管理</p>
       </div>
 
       {/* Environment */}
-      <div className="glass-card p-6">
+      <div className="glass-card p-6 animate-fade-in stagger-1">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#F8FAFC]">本地环境</h2>
-          <button onClick={checkEnv} disabled={envLoading} className="text-xs text-[#60A5FA] hover:text-[#93C5FD]">
+          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">本地环境</h2>
+          <button onClick={checkEnv} disabled={envLoading} className="text-xs text-[var(--color-accent-blue)] hover:text-[var(--color-accent-blue-glow)] transition-colors duration-200">
             {envLoading ? '检测中...' : '重新检测'}
           </button>
         </div>
@@ -91,27 +91,27 @@ export default function SettingsPage() {
             <EnvDot ok={envStatus.dataDir} label="数据目录" />
           </div>
         ) : (
-          <p className="text-xs text-[#64748B]">点击"重新检测"检查本地环境</p>
+          <p className="text-xs text-[var(--color-text-muted)]">点击"重新检测"检查本地环境</p>
         )}
-        <p className="text-[10px] text-[#475569] mt-3">
+        <p className="text-[10px] text-[var(--color-text-muted)] mt-3">
           本地环境仅在使用 CSV 导入和爬虫采集时需要。B站一键采集不需要本地环境。
         </p>
       </div>
 
       {/* Terminology */}
-      <div className="glass-card p-6">
-        <h2 className="text-sm font-semibold text-[#F8FAFC] mb-4">术语显示</h2>
-        <p className="text-xs text-[#94A3B8] mb-4">
+      <div className="glass-card p-6 animate-fade-in stagger-2">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">术语显示</h2>
+        <p className="text-xs text-[var(--color-text-secondary)] mb-4">
           选择图表和标签中维度名称的显示方式。学术模式显示理论框架术语，通俗模式显示日常用语。
         </p>
         <div className="flex gap-2">
           <button
             onClick={() => setTerminologyMode('academic')}
             className={cn(
-              'px-4 py-2 rounded-lg text-xs transition-all',
+              'px-4 py-2 rounded-lg text-xs transition-all duration-200',
               terminologyMode === 'academic'
-                ? 'bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20'
-                : 'bg-[#111827] text-[#94A3B8] border border-[#1E293B]'
+                ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
+                : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]'
             )}
           >
             学术模式
@@ -119,61 +119,61 @@ export default function SettingsPage() {
           <button
             onClick={() => setTerminologyMode('plain')}
             className={cn(
-              'px-4 py-2 rounded-lg text-xs transition-all',
+              'px-4 py-2 rounded-lg text-xs transition-all duration-200',
               terminologyMode === 'plain'
-                ? 'bg-[#F59E0B]/10 text-[#FCD34D] border border-[#F59E0B]/20'
-                : 'bg-[#111827] text-[#94A3B8] border border-[#1E293B]'
+                ? 'bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)] border border-[var(--color-accent-amber)]/20'
+                : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]'
             )}
           >
             通俗模式
           </button>
         </div>
-        <div className="mt-3 text-xs text-[#64748B]">
+        <div className="mt-3 text-xs text-[var(--color-text-muted)]">
           当前：{terminologyMode === 'academic' ? '认知加工、情感效价、认同层级...' : '思考深度、情感正负、认同程度...'}
         </div>
       </div>
 
       {/* Demo Data */}
-      <div className="glass-card p-6">
-        <h2 className="text-sm font-semibold text-[#F8FAFC] mb-4">演示数据</h2>
-        <p className="text-xs text-[#94A3B8] mb-4">
+      <div className="glass-card p-6 animate-fade-in stagger-3">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">演示数据</h2>
+        <p className="text-xs text-[var(--color-text-secondary)] mb-4">
           加载模拟数据来体验平台功能。演示数据包含 B站和小红书的模拟评论，已预设分析结果。
         </p>
         <div className="flex gap-3">
-          <button onClick={loadDemo} className="px-4 py-2 bg-[#F59E0B]/10 text-[#F59E0B] rounded-lg text-xs hover:bg-[#F59E0B]/20 transition-colors">
+          <button onClick={loadDemo} className="px-4 py-2 bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)] rounded-lg text-xs hover:bg-[var(--color-accent-amber)]/15 transition-colors duration-200 active:scale-[0.98]">
             加载演示数据
           </button>
-          <button onClick={clearDemo} className="px-4 py-2 bg-[#EF4444]/10 text-[#EF4444] rounded-lg text-xs hover:bg-[#EF4444]/20 transition-colors">
+          <button onClick={clearDemo} className="px-4 py-2 bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)] rounded-lg text-xs hover:bg-[var(--color-accent-red)]/15 transition-colors duration-200 active:scale-[0.98]">
             清空数据
           </button>
         </div>
       </div>
 
       {/* Projects */}
-      <div className="glass-card p-6">
-        <h2 className="text-sm font-semibold text-[#F8FAFC] mb-4">项目管理</h2>
+      <div className="glass-card p-6 animate-fade-in stagger-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">项目管理</h2>
         {projects.length === 0 ? (
-          <p className="text-xs text-[#64748B]">暂无项目</p>
+          <p className="text-xs text-[var(--color-text-muted)]">暂无项目</p>
         ) : (
           <div className="space-y-2">
             {projects.map(p => (
               <div
                 key={p.id}
                 className={cn(
-                  'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all',
+                  'flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all duration-200',
                   currentProject?.id === p.id
-                    ? 'border-[#3B82F6]/30 bg-[#3B82F6]/5'
-                    : 'border-[#1E293B] hover:border-[#334155]'
+                    ? 'border-[var(--color-accent-blue)]/20 bg-[var(--color-accent-blue)]/5'
+                    : 'border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)]'
                 )}
                 onClick={() => setCurrentProject(p)}
               >
                 <div>
-                  <div className="text-sm text-[#F8FAFC]">{p.name}</div>
-                  <div className="text-[10px] text-[#64748B]">关键词: {p.keyword}</div>
+                  <div className="text-sm text-[var(--color-text-primary)]">{p.name}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)]">关键词: {p.keyword}</div>
                 </div>
                 <span className={cn(
                   'px-2 py-0.5 rounded text-[10px]',
-                  p.status === 'active' ? 'bg-[#10B981]/10 text-[#10B981]' : 'bg-[#64748B]/10 text-[#64748B]'
+                  p.status === 'active' ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]' : 'bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)]'
                 )}>
                   {p.status === 'active' ? '活跃' : '归档'}
                 </span>
@@ -185,7 +185,7 @@ export default function SettingsPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm bg-[#10B981] text-white shadow-lg animate-fade-in">
+        <div className="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-lg text-sm bg-[var(--color-accent-green)] text-white shadow-lg animate-fade-in-up">
           {toast}
         </div>
       )}

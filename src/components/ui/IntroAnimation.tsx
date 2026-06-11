@@ -177,12 +177,12 @@ export function IntroAnimation() {
       <canvas ref={canvasRef} className="w-full h-full" />
       <button
         onClick={finish}
-        className="absolute top-6 right-6 px-4 py-2 rounded-lg bg-[#0B1221]/80 text-[#94A3B8] text-sm border border-[#1E293B] hover:border-[#334155] transition-colors backdrop-blur-sm"
+        className="absolute top-6 right-6 px-4 py-2 rounded-lg bg-[var(--color-bg-card)]/80 text-[var(--color-text-secondary)] text-sm border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors duration-200 backdrop-blur-sm"
       >
         跳过动画
       </button>
       <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-center">
-        <p className="text-[#64748B] text-xs">
+        <p className="text-[var(--color-text-muted)] text-xs">
           <span ref={phaseRef}>记忆奇点...</span>
         </p>
       </div>

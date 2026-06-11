@@ -56,9 +56,9 @@ export function KPICard({ label, value, isPercent = false, change, color = '#3B8
         className
       )}
     >
-      <div className="text-xs text-[#64748B] mb-2">{label}</div>
+      <div className="text-xs text-[var(--color-text-muted)] mb-2">{label}</div>
       <div
-        className="text-2xl font-bold text-[#F8FAFC] tabular-nums"
+        className="text-2xl font-bold tabular-nums"
         style={{
           fontFamily: 'var(--font-jetbrains-mono, monospace)',
           color: color,
@@ -69,11 +69,11 @@ export function KPICard({ label, value, isPercent = false, change, color = '#3B8
       {change !== undefined && change !== 0 && (
         <div className={cn(
           'text-xs mt-1 flex items-center gap-1',
-          change > 0 ? 'text-[#10B981]' : 'text-[#EF4444]'
+          change > 0 ? 'text-[var(--color-accent-green)]' : 'text-[var(--color-accent-red)]'
         )}>
           <span>{change > 0 ? '↑' : '↓'}</span>
           <span>{Math.abs(change)}%</span>
-          <span className="text-[#64748B]">vs 上期</span>
+          <span className="text-[var(--color-text-muted)]">vs 上期</span>
         </div>
       )}
     </div>

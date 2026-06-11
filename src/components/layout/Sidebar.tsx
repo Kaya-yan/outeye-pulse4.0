@@ -38,7 +38,7 @@ export function Sidebar() {
     <aside
       className={cn(
         'fixed left-0 top-14 bottom-0 z-40 hidden md:block',
-        'bg-[#0B1221] border-r border-[#1E293B]',
+        'bg-[var(--color-bg-card)] border-r border-[var(--color-border-subtle)]',
         'transition-all duration-300',
         sidebarCollapsed ? 'w-16' : 'w-52'
       )}
@@ -46,7 +46,7 @@ export function Sidebar() {
       <div className="flex flex-col h-full">
         {/* Navigation Items */}
         <nav className="flex-1 py-4 px-2 space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.map((item, index) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
             return (
               <Link
@@ -55,22 +55,27 @@ export function Sidebar() {
                 title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm',
-                  'transition-all duration-200 group',
+                  'transition-all duration-200 group relative',
                   isActive
-                    ? 'bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20'
-                    : 'text-[#94A3B8] hover:bg-[#111827] hover:text-[#F8FAFC] border border-transparent'
+                    ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
                 )}
+                style={{ animationDelay: `${index * 0.05}s` }}
               >
+                {/* Active indicator bar */}
+                {isActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-[var(--color-accent-blue)]" />
+                )}
                 <span className={cn(
-                  'flex-shrink-0',
-                  isActive ? 'text-[#60A5FA]' : 'text-[#64748B] group-hover:text-[#94A3B8]'
+                  'flex-shrink-0 transition-colors duration-200',
+                  isActive ? 'text-[var(--color-accent-blue)]' : 'text-[var(--color-text-muted)] group-hover:text-[var(--color-text-secondary)]'
                 )}>
                   {NAV_ICONS[item.href]}
                 </span>
                 {!sidebarCollapsed && (
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{item.label}</div>
-                    <div className="text-[10px] text-[#64748B] truncate">
+                    <div className={cn('truncate', isActive ? 'font-medium' : 'font-normal')}>{item.label}</div>
+                    <div className="text-[10px] text-[var(--color-text-muted)] truncate">
                       {item.desc}
                     </div>
                   </div>
@@ -81,24 +86,24 @@ export function Sidebar() {
         </nav>
 
         {/* Collapse Toggle */}
-        <div className="p-2 border-t border-[#1E293B]">
+        <div className="p-2 border-t border-[var(--color-border-subtle)]">
           <button
             onClick={toggleSidebar}
             className={cn(
               'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs',
-              'text-[#64748B] hover:text-[#94A3B8] hover:bg-[#111827]',
+              'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]',
               'transition-all duration-200'
             )}
           >
             <svg
-              className={cn('w-4 h-4 transition-transform', sidebarCollapsed && 'rotate-180')}
+              className={cn('w-4 h-4 transition-transform duration-200', sidebarCollapsed && 'rotate-180')}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
             </svg>
-            {!sidebarCollapsed && <span>收起侧边栏</span>}
+            {!sidebarCollapsed && <span>收起</span>}
           </button>
         </div>
       </div>

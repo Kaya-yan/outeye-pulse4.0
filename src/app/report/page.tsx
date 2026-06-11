@@ -121,11 +121,11 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-noto-serif-sc)' }}>
+      <div className="animate-fade-in">
+        <h1 className="text-2xl font-bold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-serif)' }}>
           智能简报工坊
         </h1>
-        <p className="text-sm text-[#94A3B8] mt-1">
+        <p className="text-sm text-[var(--color-text-secondary)] mt-1">
           一键生成结构化研究报告 · 直接服务论文写作
         </p>
       </div>
@@ -133,16 +133,16 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Config */}
         <div className="space-y-4">
-          <div className="glass-card p-5 animate-fade-in">
-            <h3 className="text-sm font-semibold text-[#F8FAFC] mb-4">报告配置</h3>
+          <div className="glass-card p-5 animate-fade-in stagger-1">
+            <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">报告配置</h3>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-[#64748B] mb-2">报告类型</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-2">报告类型</label>
                 <select
                   value={reportType}
                   onChange={(e) => setReportType(e.target.value as typeof reportType)}
-                  className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#94A3B8] border border-[#1E293B] text-sm"
+                  className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-deep)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] text-sm focus:border-[var(--color-accent-blue)] transition-colors duration-200 outline-none"
                 >
                   <option value="thesis_package">论文数据包</option>
                   <option value="weekly">周报</option>
@@ -152,10 +152,10 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
               </div>
 
               <div>
-                <label className="block text-xs text-[#64748B] mb-2">分析维度</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-2">分析维度</label>
                 <div className="space-y-2">
                   {dimensionOptions.map(opt => (
-                    <label key={opt.id} className="flex items-center gap-2">
+                    <label key={opt.id} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={selectedDimensions.includes(opt.id)}
@@ -166,9 +166,9 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
                             setSelectedDimensions(selectedDimensions.filter(d => d !== opt.id));
                           }
                         }}
-                        className="accent-[#3B82F6]"
+                        className="accent-[var(--color-accent-blue)]"
                       />
-                      <span className="text-sm text-[#94A3B8]">{opt.label}</span>
+                      <span className="text-sm text-[var(--color-text-secondary)]">{opt.label}</span>
                     </label>
                   ))}
                 </div>
@@ -178,70 +178,50 @@ ${selectedDimensions.includes('ethics') ? `## 伦理风险分析
 
           <button
             onClick={generateReport}
-            className="w-full px-4 py-3 rounded-lg bg-[#3B82F6] text-white text-sm font-medium hover:bg-[#2563EB] transition-colors"
+            className="w-full px-4 py-3 rounded-lg bg-[var(--color-accent-blue)] text-white text-sm font-medium hover:brightness-110 active:scale-[0.98] transition-all duration-200"
           >
             生成报告
           </button>
 
           {/* Export Options */}
-          <div className="glass-card p-5 animate-fade-in stagger-1">
-            <h3 className="text-sm font-semibold text-[#F8FAFC] mb-3">导出选项</h3>
+          <div className="glass-card p-5 animate-fade-in stagger-2">
+            <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">导出选项</h3>
             <div className="space-y-2">
-              <button
-                onClick={() => {
-                  if (generatedContent) {
-                    navigator.clipboard.writeText(generatedContent).then(() => alert('已复制到剪贴板'));
-                  }
-                }}
-                disabled={!generatedContent}
-                className="w-full px-3 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-xs hover:border-[#334155] transition-colors text-left disabled:opacity-50"
-              >
-                复制 Markdown
-              </button>
-              <button
-                onClick={() => generatedContent && exportToWord(generatedContent, `${currentProject?.name || 'report'}_报告`)}
-                disabled={!generatedContent}
-                className="w-full px-3 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-xs hover:border-[#334155] transition-colors text-left disabled:opacity-50"
-              >
-                导出 Word (.docx)
-              </button>
-              <button
-                onClick={() => exportToExcel(comments, posts, `${currentProject?.name || 'data'}_评论数据`)}
-                disabled={comments.length === 0}
-                className="w-full px-3 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-xs hover:border-[#334155] transition-colors text-left disabled:opacity-50"
-              >
-                导出 Excel (.xlsx)
-              </button>
-              <button
-                onClick={() => {
-                  const data = prepareExportData(comments, posts);
-                  exportToCSV(data, `${currentProject?.name || 'data'}_评论数据`);
-                }}
-                disabled={comments.length === 0}
-                className="w-full px-3 py-2 rounded-lg bg-[#111827] text-[#94A3B8] border border-[#1E293B] text-xs hover:border-[#334155] transition-colors text-left disabled:opacity-50"
-              >
-                导出 CSV
-              </button>
+              {[
+                { label: '复制 Markdown', action: () => generatedContent && navigator.clipboard.writeText(generatedContent).then(() => alert('已复制到剪贴板')), disabled: !generatedContent },
+                { label: '导出 Word (.docx)', action: () => generatedContent && exportToWord(generatedContent, `${currentProject?.name || 'report'}_报告`), disabled: !generatedContent },
+                { label: '导出 Excel (.xlsx)', action: () => exportToExcel(comments, posts, `${currentProject?.name || 'data'}_评论数据`), disabled: comments.length === 0 },
+                { label: '导出 CSV', action: () => { const data = prepareExportData(comments, posts); exportToCSV(data, `${currentProject?.name || 'data'}_评论数据`); }, disabled: comments.length === 0 },
+              ].map(btn => (
+                <button
+                  key={btn.label}
+                  onClick={btn.action}
+                  disabled={btn.disabled}
+                  className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] text-xs hover:border-[var(--color-border-active)] transition-all duration-200 text-left disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99]"
+                >
+                  {btn.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
         {/* Right: Preview */}
         <div className="lg:col-span-2">
-          <div className="glass-card p-5 animate-fade-in stagger-2">
-            <h3 className="text-sm font-semibold text-[#F8FAFC] mb-4">报告预览</h3>
+          <div className="glass-card p-5 animate-fade-in stagger-3">
+            <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">报告预览</h3>
             {generatedContent ? (
-              <div className="bg-[#030712] rounded-lg p-6 border border-[#1E293B] max-h-[700px] overflow-y-auto">
-                <pre className="text-sm text-[#94A3B8] whitespace-pre-wrap font-mono leading-relaxed">
+              <div className="bg-[var(--color-bg-deep)] rounded-lg p-6 border border-[var(--color-border-subtle)] max-h-[700px] overflow-y-auto">
+                <pre className="text-sm text-[var(--color-text-secondary)] whitespace-pre-wrap font-mono leading-relaxed">
                   {generatedContent}
                 </pre>
               </div>
             ) : (
-              <div className="bg-[#030712] rounded-lg p-12 border border-[#1E293B] text-center">
-                <svg className="w-16 h-16 mx-auto text-[#64748B] mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="bg-[var(--color-bg-deep)] rounded-lg p-12 border border-[var(--color-border-subtle)] text-center">
+                <svg className="w-16 h-16 mx-auto text-[var(--color-text-muted)] mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p className="text-[#64748B]">
+                <p className="text-[var(--color-text-muted)]">
                   点击"生成报告"按钮预览报告内容
                 </p>
               </div>

@@ -13,10 +13,10 @@ export default function Home() {
   return (
     <div className="flex items-center justify-center h-screen">
       <div className="text-center">
-        <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-[#0EA5E9] to-[#6366F1] flex items-center justify-center mx-auto mb-4">
+        <div className="w-12 h-12 rounded-lg flex items-center justify-center mx-auto mb-4 animate-breathe" style={{ background: 'linear-gradient(135deg, #5B8DEF, #9B7BDB)' }}>
           <span className="text-white font-bold text-lg">O</span>
         </div>
-        <p className="text-[#94A3B8]">加载中...</p>
+        <p className="text-[var(--color-text-secondary)]">加载中...</p>
       </div>
     </div>
   );

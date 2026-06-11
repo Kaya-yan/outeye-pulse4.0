@@ -25,16 +25,16 @@ export function TopNav() {
     <header
       className={cn(
         'fixed top-0 left-0 right-0 z-50 h-14',
-        'bg-[#0B1221] border-b border-[#1E293B]',
+        'bg-[var(--color-bg-card)] border-b border-[var(--color-border-subtle)]',
         'flex items-center justify-between px-6',
-        'backdrop-blur-xl bg-opacity-90'
+        'backdrop-blur-xl bg-opacity-95'
       )}
     >
       <div className="flex items-center gap-4">
         {/* Mobile hamburger */}
         <button
           onClick={() => setMobileNavOpen(prev => !prev)}
-          className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#111827] transition-colors"
+          className="md:hidden flex items-center justify-center w-8 h-8 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors"
           aria-label="打开导航菜单"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -47,43 +47,43 @@ export function TopNav() {
         </button>
 
         {/* Logo */}
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0EA5E9] to-[#6366F1] flex items-center justify-center">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #5B8DEF, #9B7BDB)' }}>
             <span className="text-white font-bold text-sm">O</span>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-[#F8FAFC] leading-none">
-              OutEye 4.0
+            <h1 className="text-sm font-semibold text-[var(--color-text-primary)] leading-none tracking-tight">
+              OutEye
             </h1>
-            <p className="text-[10px] text-[#64748B] leading-none mt-0.5">
-              Pulse 记忆工坊
+            <p className="text-[10px] text-[var(--color-text-muted)] leading-none mt-0.5">
+              记忆工坊
             </p>
           </div>
         </div>
 
         {/* Current Project */}
         {currentProject && (
-          <div className="flex items-center gap-2 ml-4 pl-4 border-l border-[#1E293B]">
-            <span className="text-xs text-[#64748B]">项目:</span>
-            <span className="text-xs text-[#94A3B8] font-medium">
+          <div className="flex items-center gap-2 ml-4 pl-4 border-l border-[var(--color-border-subtle)]">
+            <span className="text-xs text-[var(--color-text-muted)]">项目:</span>
+            <span className="text-xs text-[var(--color-text-secondary)] font-medium">
               {currentProject.name}
             </span>
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] bg-[#10B981]/10 text-[#10B981]">
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]">
               {currentProject.status === 'active' ? '活跃' : '归档'}
             </span>
           </div>
         )}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {/* Replay Intro */}
         <button
           onClick={replayIntro}
           aria-label="重播入场动画"
           className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs',
-            'bg-[#111827] text-[#94A3B8] border border-[#1E293B]',
-            'hover:border-[#334155] transition-all duration-200'
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs',
+            'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]',
+            'hover:border-[var(--color-border-active)] transition-all duration-200'
           )}
           title="重播入场动画"
         >
@@ -98,11 +98,11 @@ export function TopNav() {
           onClick={togglePresentationMode}
           aria-label={presentationMode ? '退出演示模式' : '进入演示模式'}
           className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs',
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs',
             'transition-all duration-200',
             presentationMode
-              ? 'bg-[#3B82F6]/20 text-[#60A5FA] border border-[#3B82F6]/30'
-              : 'bg-[#111827] text-[#94A3B8] border border-[#1E293B] hover:border-[#334155]'
+              ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue-glow)] border border-[var(--color-accent-blue)]/20'
+              : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)]'
           )}
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -116,9 +116,9 @@ export function TopNav() {
           onClick={handleExport}
           disabled={!currentProject}
           className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs',
-            'bg-[#111827] text-[#94A3B8] border border-[#1E293B]',
-            'hover:border-[#334155] transition-all duration-200'
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs',
+            'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)]',
+            'hover:border-[var(--color-border-active)] transition-all duration-200'
           )}
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -133,12 +133,12 @@ export function TopNav() {
       {mobileNavOpen && (
         <>
           <div
-            className="fixed inset-0 z-40 bg-black/50 md:hidden"
+            className="fixed inset-0 z-40 bg-black/60 md:hidden animate-fade-in"
             onClick={() => setMobileNavOpen(false)}
           />
-          <nav className="fixed top-14 left-0 bottom-0 z-50 w-64 bg-[#0B1221] border-r border-[#1E293B] md:hidden overflow-y-auto">
+          <nav className="fixed top-14 left-0 bottom-0 z-50 w-64 bg-[var(--color-bg-card)] border-r border-[var(--color-border-subtle)] md:hidden overflow-y-auto animate-slide-left">
             <div className="py-4 px-3 space-y-1">
-              {NAV_ITEMS.map(item => {
+              {NAV_ITEMS.map((item, index) => {
                 const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
                 return (
                   <Link
@@ -146,15 +146,16 @@ export function TopNav() {
                     href={item.href}
                     onClick={() => setMobileNavOpen(false)}
                     className={cn(
-                      'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                      'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200',
                       isActive
-                        ? 'bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20'
-                        : 'text-[#94A3B8] hover:bg-[#111827] hover:text-[#F8FAFC] border border-transparent'
+                        ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border-l-2 border-l-[var(--color-accent-blue)]'
+                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
                     )}
+                    style={{ animationDelay: `${index * 0.05}s` }}
                   >
                     <div>
-                      <div className="font-medium">{item.label}</div>
-                      <div className="text-[10px] text-[#64748B]">{item.desc}</div>
+                      <div className={cn(isActive && 'font-medium')}>{item.label}</div>
+                      <div className="text-[10px] text-[var(--color-text-muted)]">{item.desc}</div>
                     </div>
                   </Link>
                 );
