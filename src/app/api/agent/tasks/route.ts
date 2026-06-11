@@ -21,11 +21,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  if (!data) {
+  if (!data || (Array.isArray(data) && data.length === 0)) {
     return NextResponse.json({ task: null, message: 'no pending tasks' });
   }
 
   const task = Array.isArray(data) ? data[0] : data;
+  if (!task || !task.id) {
+    return NextResponse.json({ task: null, message: 'no pending tasks' });
+  }
   return NextResponse.json({ task });
 }
 
@@ -77,8 +80,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ task: data, success: true });
-  } catch {
-    return NextResponse.json({ error: 'invalid request body' }, { status: 400 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `server error: ${msg}` }, { status: 500 });
   }
 }
 
@@ -115,7 +119,8 @@ export async function PATCH(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true });
-  } catch {
-    return NextResponse.json({ error: 'invalid request body' }, { status: 400 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `server error: ${msg}` }, { status: 500 });
   }
 }

@@ -18,6 +18,7 @@ import csv
 import hashlib
 import json
 import os
+import random
 import re
 import signal
 import sys
@@ -334,6 +335,13 @@ def parse_args() -> argparse.Namespace:
             elif arg.startswith("--bvid="):
                 args.bvid = arg.split("=", 1)[1]
 
+    if not args.bvid:
+        for arg in sys.argv[1:]:
+            m = re.search(r"(BV\w{10})", arg)
+            if m:
+                args.bvid = m.group(1)
+                break
+
     return args
 
 
@@ -350,14 +358,7 @@ def main():
         return
 
     if not args.bvid:
-        for arg in sys.argv[1:]:
-            m = re.search(r"(BV\w{10})", arg)
-            if m:
-                args.bvid = m.group(1)
-                break
-
-    if not args.bvid:
-        print("Usage: python scrape_bilibili.py --bvid=BVxxx")
+        print("Usage: python scrape_bilibili.py --bvid=BVxxx", file=sys.stderr)
         sys.exit(1)
 
     current_bvid = args.bvid
@@ -367,9 +368,8 @@ def main():
 
     cookies = load_cookies_playwright(cookies_path)
     if not cookies:
-        print("⚠️  未找到 Cookie 文件或文件为空")
-        print(f"   路径: {cookies_path}")
-        print("   运行 --login 模式获取 Cookie，或手动创建 cookies-bilibili.json")
+        print(f"⚠️  未找到 Cookie 文件或文件为空: {cookies_path}", file=sys.stderr)
+        print("   运行 --login 模式获取 Cookie，或手动创建 cookies-bilibili.json", file=sys.stderr)
         sys.exit(1)
 
     if not has_sessdata(cookies):
@@ -386,7 +386,7 @@ def main():
         print(f"  img_key: {img_key[:12]}...")
         print(f"  sub_key: {sub_key[:12]}...")
     except Exception as e:
-        print(f"❌ 获取 wbi 密钥失败: {e}")
+        print(f"❌ 获取 wbi 密钥失败: {e}", file=sys.stderr)
         sys.exit(1)
 
     print("\n[2/4] 获取视频信息...")
@@ -451,7 +451,7 @@ def main():
             no_new_count = 0
 
         next_offset = cursor.get("next", 0) or 0
-        delay = 2.0 + 3.0 * (scroll_count % 3) / 3
+        delay = random.uniform(2.0, 5.0)
         time.sleep(delay)
 
     all_replies = list(all_replies_map.values())

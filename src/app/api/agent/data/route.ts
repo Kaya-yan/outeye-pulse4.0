@@ -8,7 +8,7 @@ const VALID_PLATFORMS = ['xhs', 'bilibili'] as const;
 /**
  * POST /api/agent/data
  * Local agent posts collected data (comments/posts) back to cloud.
- * Body: { task_id?, platform, data_type?, raw_data: [...], source_file? }
+ * Body: { task_id?, platform, data_type?, raw_data: [...], source_file?, project_id? }
  */
 export async function POST(request: NextRequest) {
   try {
@@ -19,6 +19,7 @@ export async function POST(request: NextRequest) {
       data_type = 'comments',
       raw_data,
       source_file,
+      project_id,
     } = body;
 
     if (!platform || !raw_data || !Array.isArray(raw_data)) {
@@ -48,47 +49,51 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+      return NextResponse.json({ error: `agent_data insert failed: ${insertError.message}` }, { status: 500 });
     }
 
     // Auto-import: batch insert into comments
-    const importResult = await importComments(raw_data, platform);
+    const importResult = await importComments(raw_data, platform, project_id);
 
     // Update agent_data status
     await supabase
       .from('agent_data')
       .update({
-        status: importResult.errors > 0 && importResult.imported === 0 ? 'failed' : 'imported',
+        status: importResult.imported === 0 ? 'failed' : 'imported',
         imported_count: importResult.imported,
         duplicate_count: importResult.duplicates,
         imported_at: new Date().toISOString(),
+        error_message: importResult.imported === 0 ? `0 imported, ${importResult.duplicates} dup, ${importResult.errors} err` : null,
       })
       .eq('id', agentData.id);
 
     return NextResponse.json({
-      success: true,
+      success: importResult.imported > 0,
       agent_data_id: agentData.id,
       received: raw_data.length,
       imported: importResult.imported,
       duplicates: importResult.duplicates,
       errors: importResult.errors,
+      details: importResult.details,
     });
-  } catch {
-    return NextResponse.json({ error: 'invalid request body' }, { status: 400 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `server error: ${msg}` }, { status: 500 });
   }
 }
 
 /**
  * Batch-import comments into the main comments table.
- * Uses batched queries to avoid N+1 round-trips.
+ * Auto-creates post records when they don't exist.
  */
 async function importComments(
   rawItems: Record<string, unknown>[],
-  _platform: string
-): Promise<{ imported: number; duplicates: number; errors: number }> {
-  // Step 1: Normalize and filter items, compute hashes
+  platform: string,
+  projectId?: string
+): Promise<{ imported: number; duplicates: number; errors: number; details: string[] }> {
   const adPattern = /加微信|私聊|优惠|折扣|代购|链接|下单|购买|vx|淘宝|拼多多/i;
   const normalized: { text: string; likes: number; username: string; createTime: string; sourceUrl: string; hash: string }[] = [];
+  const details: string[] = [];
   let shortOrEmpty = 0;
   let adsFiltered = 0;
 
@@ -107,10 +112,11 @@ async function importComments(
   }
 
   if (normalized.length === 0) {
-    return { imported: 0, duplicates: 0, errors: shortOrEmpty + adsFiltered };
+    details.push(`All ${rawItems.length} items filtered: ${shortOrEmpty} short/empty, ${adsFiltered} ads`);
+    return { imported: 0, duplicates: 0, errors: shortOrEmpty + adsFiltered, details };
   }
 
-  // Step 2: Batch-fetch existing hashes for dedup (one query)
+  // Batch-fetch existing hashes for dedup
   const allHashes = normalized.map(n => n.hash);
   const { data: existingRows } = await supabase
     .from('comments')
@@ -119,7 +125,7 @@ async function importComments(
 
   const existingHashes = new Set((existingRows || []).map(r => r.content_hash).filter(Boolean));
 
-  // Step 3: Batch-fetch post IDs for source URLs (one query)
+  // Resolve post IDs — auto-create missing posts
   const uniqueUrls = [...new Set(normalized.map(n => n.sourceUrl).filter(Boolean))];
   const urlToPostId = new Map<string, string>();
 
@@ -132,9 +138,33 @@ async function importComments(
     for (const row of postRows || []) {
       urlToPostId.set(row.url, row.id);
     }
+
+    // Auto-create missing posts
+    const missingUrls = uniqueUrls.filter(u => !urlToPostId.has(u));
+    for (const url of missingUrls) {
+      const title = extractTitleFromUrl(url, platform);
+      const { data: newPost, error: postErr } = await supabase
+        .from('posts')
+        .insert({
+          platform,
+          url,
+          title,
+          project_id: projectId || null,
+          collected_by: 'agent',
+        })
+        .select('id')
+        .single();
+
+      if (!postErr && newPost) {
+        urlToPostId.set(url, newPost.id);
+        details.push(`Auto-created post for ${url}`);
+      } else {
+        details.push(`Failed to create post for ${url}: ${postErr?.message}`);
+      }
+    }
   }
 
-  // Step 4: Build insert rows, skip duplicates and missing posts
+  // Build insert rows
   const toInsert: Record<string, unknown>[] = [];
   let duplicates = 0;
   let missingPost = 0;
@@ -146,6 +176,7 @@ async function importComments(
 
     toInsert.push({
       post_id: postId,
+      project_id: projectId || null,
       text: n.text,
       likes: n.likes,
       sampling_tier: getSamplingTier(n.likes),
@@ -154,7 +185,7 @@ async function importComments(
     });
   }
 
-  // Step 5: Batch insert (try bulk first, fall back to individual)
+  // Batch insert
   let imported = 0;
   if (toInsert.length > 0) {
     const { error: batchErr } = await supabase.from('comments').insert(toInsert);
@@ -168,8 +199,25 @@ async function importComments(
     }
   }
 
+  if (shortOrEmpty > 0) details.push(`${shortOrEmpty} short/empty`);
+  if (adsFiltered > 0) details.push(`${adsFiltered} ads filtered`);
+  if (missingPost > 0) details.push(`${missingPost} missing post (auto-create failed)`);
+  if (duplicates > 0) details.push(`${duplicates} duplicates`);
+
   const errors = shortOrEmpty + adsFiltered + missingPost + (toInsert.length - imported);
-  return { imported, duplicates, errors };
+  return { imported, duplicates, errors, details };
+}
+
+function extractTitleFromUrl(url: string, platform: string): string {
+  if (platform === 'bilibili') {
+    const m = url.match(/(BV\w{10})/);
+    return m ? `B站视频 ${m[1]}` : 'B站视频';
+  }
+  if (platform === 'xhs') {
+    const m = url.match(/\/explore\/(\w+)/) || url.match(/\/discovery\/item\/(\w+)/);
+    return m ? `小红书笔记 ${m[1]}` : '小红书笔记';
+  }
+  return `${platform} 内容`;
 }
 
 function getSamplingTier(likes: number): string {

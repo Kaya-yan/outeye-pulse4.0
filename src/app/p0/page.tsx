@@ -128,6 +128,8 @@ export default function P0Page() {
     env: true,
     config: true,
     modeB: true,
+    agentTask: true,
+    analysis: true,
     files: true,
     import: true,
     guide: false,
@@ -185,6 +187,52 @@ export default function P0Page() {
   const [importing, setImporting] = useState(false);
   const [importPostId, setImportPostId] = useState('');
 
+  // ─── Agent task creation ──────────────────────────────────────
+  const [taskPlatform, setTaskPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
+  const [taskUrl, setTaskUrl] = useState('');
+  const [taskMaxComments, setTaskMaxComments] = useState(2000);
+  const [taskCreating, setTaskCreating] = useState(false);
+  const [agentTasks, setAgentTasks] = useState<{ id: string; platform: string; target_url: string; status: string; max_comments: number; created_at: string; error_message?: string }[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+
+  const loadAgentTasks = useCallback(async () => {
+    setTasksLoading(true);
+    try {
+      const { supabase } = await import('@/lib/supabase');
+      const { data } = await supabase
+        .from('task_queue')
+        .select('id,platform,target_url,status,max_comments,created_at,error_message')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      setAgentTasks(data || []);
+    } catch {
+      // task_queue table may not exist yet
+    } finally {
+      setTasksLoading(false);
+    }
+  }, []);
+
+  const handleCreateTask = async () => {
+    if (!taskUrl.trim()) { setToast({ type: 'error', message: '请输入目标链接' }); return; }
+    setTaskCreating(true);
+    try {
+      const res = await fetch('/api/agent/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform: taskPlatform, target_url: taskUrl.trim(), max_comments: taskMaxComments }),
+      });
+      const data = await res.json();
+      if (data.error) { setToast({ type: 'error', message: data.error }); return; }
+      setToast({ type: 'success', message: '任务已创建，等待本地 Agent 领取' });
+      setTaskUrl('');
+      loadAgentTasks();
+    } catch {
+      setToast({ type: 'error', message: '创建失败，请检查网络' });
+    } finally {
+      setTaskCreating(false);
+    }
+  };
+
   // ─── Local logs ───────────────────────────────────────────────
   const [localLogs, setLocalLogs] = useState<LocalLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -230,9 +278,92 @@ export default function P0Page() {
     }
   }, [demoLoaded, loadDemoProject, setProjects, setCurrentProject, setPosts, setComments]);
 
+  // ─── AI Analysis ─────────────────────────────────────────────
+  const [analysisTarget, setAnalysisTarget] = useState<'project' | 'post'>('project');
+  const [analysisPostId, setAnalysisPostId] = useState('');
+  const [analysisRunning, setAnalysisRunning] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{ processed: number; failed: number; total: number } | null>(null);
+  const [analysisLogs, setAnalysisLogs] = useState<{ id: string; status: string; total_comments: number; processed_comments: number; failed_comments: number; progress_percent: number; created_at: string; error_message?: string }[]>([]);
+  const [analysisPolling, setAnalysisPolling] = useState<string | null>(null);
+
+  const loadAnalysisLogs = useCallback(async () => {
+    if (!currentProject) return;
+    try {
+      const res = await fetch(`/api/analysis?projectId=${currentProject.id}`);
+      const data = await res.json();
+      setAnalysisLogs(data.logs || []);
+    } catch { /* ignore */ }
+  }, [currentProject]);
+
+  // Poll analysis progress
+  useEffect(() => {
+    if (!analysisPolling) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/analysis?logId=${analysisPolling}`);
+        const data = await res.json();
+        if (data.log) {
+          setAnalysisLogs(prev => {
+            const idx = prev.findIndex(l => l.id === data.log.id);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = data.log;
+              return updated;
+            }
+            return [data.log, ...prev];
+          });
+          if (data.log.status === 'completed' || data.log.status === 'failed') {
+            setAnalysisPolling(null);
+            setAnalysisRunning(false);
+            setAnalysisResult({
+              processed: data.log.processed_comments,
+              failed: data.log.failed_comments,
+              total: data.log.total_comments,
+            });
+            loadFromSupabase();
+          }
+        }
+      } catch { /* ignore */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [analysisPolling, loadFromSupabase]);
+
+  const handleStartAnalysis = async () => {
+    if (!currentProject) { setToast({ type: 'error', message: '请先选择项目' }); return; }
+    setAnalysisRunning(true);
+    setAnalysisResult(null);
+    try {
+      const body: Record<string, unknown> = { projectId: currentProject.id };
+      if (analysisTarget === 'post' && analysisPostId) {
+        body.postId = analysisPostId;
+      }
+      const res = await fetch('/api/analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setToast({ type: 'error', message: data.error });
+        setAnalysisRunning(false);
+        return;
+      }
+      if (data.log_id) {
+        setAnalysisPolling(data.log_id);
+        setToast({ type: 'success', message: `开始分析 ${data.total} 条评论...` });
+      } else {
+        setAnalysisRunning(false);
+        setToast({ type: 'success', message: data.message || '没有待分析的评论' });
+      }
+    } catch {
+      setToast({ type: 'error', message: '分析请求失败' });
+      setAnalysisRunning(false);
+    }
+  };
+
   useEffect(() => {
     const tasks = isLocal ? [checkEnv(), scanFiles()] : [scanFiles()];
-    tasks.push(loadLocalLogs(), loadFromSupabase());
+    tasks.push(loadLocalLogs(), loadFromSupabase(), loadAgentTasks(), loadAnalysisLogs());
     Promise.allSettled(tasks).then(() => setPageLoading(false));
   }, []);
 
@@ -475,6 +606,225 @@ export default function P0Page() {
           ))}
         </div>
       </SectionCard>}
+
+      <SectionCard {...sectionCardProps} id="agentTask" title="云端采集任务" subtitle="创建任务 → 本地 Agent 执行 → 自动导入 Supabase">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-6">
+          {/* Create task form */}
+          <div>
+            <div className="flex gap-2 mb-4">
+              {(['bilibili', 'xhs'] as const).map(p => (
+                <button key={p} onClick={() => setTaskPlatform(p)}
+                  className={cn('px-4 py-2 rounded-lg text-sm border transition-all', taskPlatform === p ? 'bg-[#3B82F6]/20 text-[#60A5FA] border-[#3B82F6]/40' : 'bg-[#030712] text-[#64748B] border-[#1E293B] hover:border-[#334155]')}>
+                  {p === 'xhs' ? '小红书' : 'B站'}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="text-xs text-[#64748B] mb-1 block">目标链接</label>
+                <input type="text" value={taskUrl} onChange={e => setTaskUrl(e.target.value)}
+                  placeholder={taskPlatform === 'bilibili' ? 'https://www.bilibili.com/video/BV...' : 'https://www.xiaohongshu.com/explore/...'}
+                  className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none font-mono" />
+              </div>
+              <div>
+                <label className="text-xs text-[#64748B] mb-1 block">最大评论数</label>
+                <input type="number" value={taskMaxComments} onChange={e => setTaskMaxComments(Math.max(1, parseInt(e.target.value) || 2000))}
+                  className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none" />
+              </div>
+            </div>
+
+            <button onClick={handleCreateTask} disabled={taskCreating || !taskUrl.trim()}
+              className="px-4 py-2 rounded-lg bg-[#3B82F6] text-white text-sm hover:bg-[#2563EB] transition-colors disabled:opacity-50">
+              {taskCreating ? '创建中...' : '创建采集任务'}
+            </button>
+
+            <div className="mt-4 p-3 rounded-lg bg-[#030712] border border-[#1E293B]">
+              <p className="text-xs text-[#64748B] mb-1">工作流</p>
+              <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
+                <span>创建任务</span>
+                <svg className="w-3 h-3 text-[#475569]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                <span>Agent 领取</span>
+                <svg className="w-3 h-3 text-[#475569]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                <span>采集数据</span>
+                <svg className="w-3 h-3 text-[#475569]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                <span>自动导入</span>
+              </div>
+              <p className="text-xs text-[#64748B] mt-2">
+                本地运行 <code className="text-[#60A5FA]">python scripts/agent/agent.py</code> 启动 Agent 轮询任务
+              </p>
+            </div>
+          </div>
+
+          {/* Task list */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-[#64748B] font-medium">任务队列</span>
+              <button onClick={loadAgentTasks} disabled={tasksLoading} className="text-xs text-[#60A5FA] hover:text-[#93C5FD] transition-colors disabled:opacity-50">
+                {tasksLoading ? '刷新中...' : '刷新'}
+              </button>
+            </div>
+
+            {agentTasks.length === 0 ? (
+              <div className="text-center py-8 text-[#64748B] text-sm">
+                暂无任务。创建任务后，本地 Agent 会自动领取并执行。
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {agentTasks.map(task => (
+                  <div key={task.id} className="bg-[#030712] rounded-lg p-3 border border-[#1E293B]">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('px-2 py-0.5 rounded text-xs font-medium', task.platform === 'xhs' ? 'bg-[#FE2C55]/10 text-[#FE2C55]' : 'bg-[#00A1D6]/10 text-[#00A1D6]')}>
+                          {task.platform === 'xhs' ? '小红书' : 'B站'}
+                        </span>
+                        <span className={cn('px-2 py-0.5 rounded text-xs',
+                          task.status === 'completed' ? 'bg-[#10B981]/10 text-[#10B981]' :
+                          task.status === 'failed' ? 'bg-[#EF4444]/10 text-[#EF4444]' :
+                          task.status === 'running' || task.status === 'claimed' ? 'bg-[#3B82F6]/10 text-[#60A5FA]' :
+                          'bg-[#F59E0B]/10 text-[#F59E0B]')}>
+                          {task.status === 'pending' ? '等待中' : task.status === 'claimed' ? '已领取' : task.status === 'running' ? '采集中' : task.status === 'completed' ? '已完成' : '失败'}
+                        </span>
+                      </div>
+                      <span className="text-xs text-[#64748B]">{new Date(task.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <p className="text-xs text-[#94A3B8] font-mono truncate">{task.target_url}</p>
+                    {task.error_message && <p className="text-xs text-[#EF4444] mt-1 truncate">{task.error_message}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard {...sectionCardProps} id="analysis" title="AI 分析" subtitle="基于六维框架对评论进行量化编码分析">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-6">
+          {/* Analysis form */}
+          <div>
+            <div className="flex gap-2 mb-4">
+              {(['project', 'post'] as const).map(t => (
+                <button key={t} onClick={() => setAnalysisTarget(t)}
+                  className={cn('px-4 py-2 rounded-lg text-sm border transition-all', analysisTarget === t ? 'bg-[#8B5CF6]/20 text-[#A78BFA] border-[#8B5CF6]/40' : 'bg-[#030712] text-[#64748B] border-[#1E293B] hover:border-[#334155]')}>
+                  {t === 'project' ? '整个项目' : '指定帖子'}
+                </button>
+              ))}
+            </div>
+
+            {analysisTarget === 'post' && (
+              <div className="mb-4">
+                <label className="text-xs text-[#64748B] mb-1 block">选择帖子</label>
+                <select value={analysisPostId} onChange={e => setAnalysisPostId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#030712] text-[#F8FAFC] border border-[#1E293B] text-sm focus:border-[#8B5CF6] outline-none">
+                  <option value="">选择帖子...</option>
+                  {posts.map(p => (
+                    <option key={p.id} value={p.id}>[{p.platform}] {p.title?.slice(0, 50)}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="p-3 rounded-lg bg-[#030712] border border-[#1E293B] mb-4">
+              <p className="text-xs text-[#64748B] mb-2 font-medium">分析维度</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { code: 'D1', name: '认知加工深度', desc: 'ELM 精细加工' },
+                  { code: 'D2', name: '情感效价/唤醒', desc: 'Russell 环状模型' },
+                  { code: 'D3', name: '记忆认同层级', desc: 'Assmann 文化记忆' },
+                  { code: 'D4', name: '行为意向阶梯', desc: '认知→行动转化' },
+                  { code: 'D5', name: '叙事传输程度', desc: '叙事卷入评估' },
+                  { code: 'D6', name: '媒介伦理风险', desc: '虚无/消费主义' },
+                ].map(d => (
+                  <div key={d.code} className="flex items-start gap-2">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#8B5CF6]/10 text-[#A78BFA] font-mono">{d.code}</span>
+                    <div>
+                      <p className="text-xs text-[#E2E8F0]">{d.name}</p>
+                      <p className="text-[10px] text-[#64748B]">{d.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={handleStartAnalysis} disabled={analysisRunning || !currentProject}
+              className="px-4 py-2 rounded-lg bg-[#8B5CF6] text-white text-sm hover:bg-[#7C3AED] transition-colors disabled:opacity-50">
+              {analysisRunning ? '分析中...' : '启动 AI 分析'}
+            </button>
+
+            {analysisResult && (
+              <div className="mt-4 p-3 rounded-lg bg-[#030712] border border-[#1E293B]">
+                <p className="text-xs text-[#64748B] mb-2 font-medium">分析结果</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="text-center">
+                    <div className="text-lg font-bold text-[#10B981]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>{analysisResult.processed}</div>
+                    <div className="text-[10px] text-[#64748B]">已分析</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-bold text-[#EF4444]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>{analysisResult.failed}</div>
+                    <div className="text-[10px] text-[#64748B]">失败</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>{analysisResult.total}</div>
+                    <div className="text-[10px] text-[#64748B]">总计</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Analysis logs */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-[#64748B] font-medium">分析日志</span>
+              <button onClick={loadAnalysisLogs} className="text-xs text-[#A78BFA] hover:text-[#C4B5FD] transition-colors">
+                刷新
+              </button>
+            </div>
+
+            {analysisLogs.length === 0 ? (
+              <div className="text-center py-8 text-[#64748B] text-sm">
+                暂无分析记录
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {analysisLogs.map(log => (
+                  <div key={log.id} className="bg-[#030712] rounded-lg p-3 border border-[#1E293B]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={cn('px-2 py-0.5 rounded text-xs',
+                        log.status === 'completed' ? 'bg-[#10B981]/10 text-[#10B981]' :
+                        log.status === 'failed' ? 'bg-[#EF4444]/10 text-[#EF4444]' :
+                        'bg-[#8B5CF6]/10 text-[#A78BFA]')}>
+                        {log.status === 'completed' ? '已完成' : log.status === 'failed' ? '失败' : '分析中'}
+                      </span>
+                      <span className="text-xs text-[#64748B]">
+                        {new Date(log.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="w-full h-1.5 bg-[#1E293B] rounded-full overflow-hidden mb-2">
+                      <div className="h-full bg-[#8B5CF6] rounded-full transition-all duration-500"
+                        style={{ width: `${log.progress_percent || 0}%` }} />
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-[#64748B]">
+                      <span>{log.processed_comments}/{log.total_comments} 条</span>
+                      <span>{log.progress_percent || 0}%</span>
+                    </div>
+
+                    {log.failed_comments > 0 && (
+                      <p className="text-xs text-[#F59E0B] mt-1">{log.failed_comments} 条分析失败</p>
+                    )}
+                    {log.error_message && (
+                      <p className="text-xs text-[#EF4444] mt-1 truncate">{log.error_message}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
 
       <SectionCard {...sectionCardProps} id="files" title="数据文件" subtitle="扫描 MediaCrawler / Playwright 输出的 CSV 文件">
         <div className="flex items-center gap-3 mb-4">

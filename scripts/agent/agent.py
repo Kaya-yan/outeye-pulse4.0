@@ -47,7 +47,7 @@ XHS_SCRAPER = SCRIPT_DIR.parent / "playwright-scraper" / "scrape-xhs.mjs"
 OUTPUT_DIR = SCRIPT_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-AGENT_ID = f"local-agent-{os.getpid()}"
+AGENT_ID = f"agent-{os.uname().nodename[:12]}-{os.getpid()}"
 
 running = True
 
@@ -202,21 +202,26 @@ def run_scraper(task: dict) -> tuple[list[dict], str]:
         raise ValueError(f"无法从 URL 提取 ID: {target_url}")
 
     max_comments = task.get("max_comments", 2000)
+    cookies_path = SCRIPT_DIR / f"cookies-{platform}.json"
 
     if platform == "bilibili":
-        cmd = [*config["cmd_prefix"], str(config["scraper"]), f"{config['id_flag']}={note_id}", f"--max-comments={max_comments}", f"--output={OUTPUT_DIR}"]
+        cmd = [*config["cmd_prefix"], str(config["scraper"]), f"{config['id_flag']}={note_id}", f"--max-comments={max_comments}", f"--output={OUTPUT_DIR}", f"--cookies={cookies_path}"]
     elif platform == "xhs":
         if not XHS_SCRAPER.exists():
             raise RuntimeError("未安装 Node.js 或小红书采集器不存在")
-        cmd = [*config["cmd_prefix"], str(config["scraper"]), f"{config['id_flag']}={target_url}", f"--max-comments={max_comments}", f"--output={OUTPUT_DIR}"]
+        cmd = [*config["cmd_prefix"], str(config["scraper"]), f"{config['id_flag']}={target_url}", f"--max-comments={max_comments}", f"--output={OUTPUT_DIR}", f"--cookies={cookies_path}"]
     else:
         raise ValueError(f"不支持的平台: {platform}")
 
     print(f"  启动 {platform} 采集器: id={note_id}, max={max_comments}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=task.get("timeout", 600))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{platform} 采集器超时（{task.get('timeout', 600)}秒）")
 
     if result.returncode != 0:
-        raise RuntimeError(f"{platform} 采集器退出码 {result.returncode}: {result.stderr[:500]}")
+        err = (result.stderr or result.stdout or "")[:500]
+        raise RuntimeError(f"{platform} 采集器退出码 {result.returncode}: {err}")
 
     csv_files = sorted(OUTPUT_DIR.glob(config["glob_pattern"]), key=lambda f: f.stat().st_mtime, reverse=True)
     if not csv_files:
@@ -263,9 +268,9 @@ def process_task(supabase: Client, task: dict) -> bool:
         comments, csv_path = run_scraper(task)
 
         if not comments:
-            print(f"  ⚠️ 未采集到数据")
-            update_task_status(supabase, task_id, "completed")
-            return True
+            print(f"  ⚠️ 未采集到数据（可能 Cookie 过期或视频无评论）")
+            update_task_status(supabase, task_id, "failed", "采集结果为空，可能 Cookie 过期")
+            return False
 
         print(f"  ✅ 采集到 {len(comments)} 条数据")
 
