@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { simpleHash, computeSampling } from '@/lib/hash';
+import { simpleHash, computeSampling, findExistingHashes, AD_PATTERN } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -102,7 +102,6 @@ async function importComments(
   platform: string,
   projectId?: string
 ): Promise<{ imported: number; duplicates: number; errors: number; details: string[] }> {
-  const adPattern = /加微信|私聊|优惠|折扣|代购|链接|下单|购买|vx|淘宝|拼多多/i;
   const normalized: { text: string; likes: number; username: string; createTime: string; sourceUrl: string; hash: string }[] = [];
   const details: string[] = [];
   let shortOrEmpty = 0;
@@ -116,7 +115,7 @@ async function importComments(
     const sourceUrl = String(item.source_url || '').trim();
 
     if (!text || text.length < 2) { shortOrEmpty++; continue; }
-    if (adPattern.test(text)) { adsFiltered++; continue; }
+    if (AD_PATTERN.test(text)) { adsFiltered++; continue; }
 
     const hash = simpleHash(`${text}|${username}|${createTime}`);
     normalized.push({ text, likes, username, createTime, sourceUrl, hash });
@@ -127,14 +126,7 @@ async function importComments(
     return { imported: 0, duplicates: 0, errors: shortOrEmpty + adsFiltered, details };
   }
 
-  // Batch-fetch existing hashes for dedup
-  const allHashes = normalized.map(n => n.hash);
-  const { data: existingRows } = await supabase
-    .from('comments')
-    .select('content_hash')
-    .in('content_hash', allHashes);
-
-  const existingHashes = new Set((existingRows || []).map(r => r.content_hash).filter(Boolean));
+  const existingHashes = await findExistingHashes(supabase, normalized.map(n => n.hash));
 
   // Resolve post IDs — auto-create missing posts
   const uniqueUrls = [...new Set(normalized.map(n => n.sourceUrl).filter(Boolean))];

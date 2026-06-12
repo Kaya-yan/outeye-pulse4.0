@@ -12,7 +12,7 @@ const MIXIN_KEY_ENC_TAB = [
   36, 20, 34, 44, 52,
 ];
 
-const BILI_HEADERS = {
+export const BILI_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   'Referer': 'https://www.bilibili.com',
   'Accept': 'application/json',
@@ -165,4 +165,52 @@ export async function searchBilibili(
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, '');
+}
+
+// ─── B站评论 API helpers ─────────────────────────────────────
+
+export interface BiliReply {
+  rpid: number;
+  content: { message: string };
+  like: number;
+  member: { uname: string };
+  ctime: number;
+  rcount: number;
+  replies?: BiliReply[];
+}
+
+export async function fetchVideoInfo(bvid: string) {
+  try {
+    const resp = await fetch(
+      `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`,
+      { headers: BILI_HEADERS, signal: AbortSignal.timeout(15000) },
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.code === 0 ? data.data : null;
+  } catch { return null; }
+}
+
+export async function fetchReplies(
+  oid: number, nextOffset: number, mode: number,
+): Promise<{ replies: BiliReply[]; nextCursor: number; isEnd: boolean }> {
+  const ps = encodeURIComponent(JSON.stringify({ next_offset: String(nextOffset) }));
+  const url = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${oid}&mode=${mode}&pagination_str=${ps}`;
+  const resp = await fetch(url, { headers: BILI_HEADERS, signal: AbortSignal.timeout(15000) });
+  if (!resp.ok) throw new Error(`B站 API HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (data.code !== 0) throw new Error(`B站 API code ${data.code}`);
+  return {
+    replies: data.data?.replies || [],
+    nextCursor: data.data?.cursor?.next || 0,
+    isEnd: data.data?.cursor?.is_end === true,
+  };
+}
+
+export async function fetchSubReplies(oid: number, rootRpid: number): Promise<BiliReply[]> {
+  const url = `https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${oid}&root=${rootRpid}&ps=20&pn=1`;
+  const resp = await fetch(url, { headers: BILI_HEADERS, signal: AbortSignal.timeout(10000) });
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return data.code === 0 ? data.data?.replies || [] : [];
 }

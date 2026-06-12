@@ -1,3 +1,9 @@
+export const AD_PATTERN = /加微信|私聊|优惠|折扣|代购|链接|下单|购买|vx|淘宝|拼多多/i;
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 /**
  * Simple DJB2 hash for content deduplication.
  * Returns a base-36 string to keep Supabase storage compact.

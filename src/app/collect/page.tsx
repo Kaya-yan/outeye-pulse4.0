@@ -4,8 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
-import { cn } from '@/lib/utils';
-import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults, updateSearchTask } from '@/lib/supabase-service';
+import { cn, formatNumber } from '@/lib/utils';
+import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults } from '@/lib/supabase-service';
 import type { RawComment, SearchResult } from '@/lib/supabase-service';
 
 // ─── Mode Tabs ─────────────────────────────────────────────────
@@ -130,7 +130,7 @@ function KeywordSearch() {
         const res = await fetch('/api/collect/xhs-search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20 }),
+          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20, timeRange }),
         });
         const data = await res.json();
         if (data.error) {
@@ -242,11 +242,6 @@ function KeywordSearch() {
 
   const totalPages = Math.ceil(total / 20);
 
-  const formatNum = (n: number) => {
-    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
-    return n.toLocaleString();
-  };
-
   return (
     <div className="glass-card p-8 animate-fade-in">
       <div className="text-center mb-6">
@@ -258,9 +253,7 @@ function KeywordSearch() {
         </p>
       </div>
 
-      {/* Search Input */}
       <div className="max-w-3xl mx-auto space-y-3">
-        {/* Platform Selector */}
         <div className="flex items-center gap-2 justify-center">
           {([
             { key: 'bilibili' as const, label: 'B站', color: '#00A1D6' },
@@ -308,35 +301,31 @@ function KeywordSearch() {
           </button>
         </div>
 
-        {/* Time Range Filter (Bilibili only) */}
-        {platform === 'bilibili' && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-[var(--color-text-muted)]">时间范围：</span>
-            {([
-              { key: 'all' as const, label: '全部' },
-              { key: '1y' as const, label: '近一年' },
-              { key: '6m' as const, label: '近半年' },
-              { key: '3m' as const, label: '近三月' },
-              { key: '1m' as const, label: '近一月' },
-            ]).map(t => (
-              <button
-                key={t.key}
-                onClick={() => { setTimeRange(t.key); if (biliResults.length > 0) handleSearch(); }}
-                className={cn(
-                  'px-2.5 py-1 rounded text-[10px] transition-all duration-200',
-                  timeRange === t.key
-                    ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-[var(--color-text-muted)]">时间范围：</span>
+          {([
+            { key: 'all' as const, label: '全部' },
+            { key: '1y' as const, label: '近一年' },
+            { key: '6m' as const, label: '近半年' },
+            { key: '3m' as const, label: '近三月' },
+            { key: '1m' as const, label: '近一月' },
+          ]).map(t => (
+            <button
+              key={t.key}
+              onClick={() => { setTimeRange(t.key); if ((platform === 'bilibili' && biliResults.length > 0) || (platform === 'xhs' && xhsResults.length > 0)) handleSearch(); }}
+              className={cn(
+                'px-2.5 py-1 rounded text-[10px] transition-all duration-200',
+                timeRange === t.key
+                  ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Error */}
       {error && (
         <div className="mt-4 max-w-3xl mx-auto p-3 rounded-lg bg-[var(--color-accent-red)]/10 border border-[var(--color-accent-red)]/20 animate-fade-in">
           <p className="text-xs text-[var(--color-accent-red)]">{error}</p>
@@ -349,10 +338,10 @@ function KeywordSearch() {
           {/* Stats Cards */}
           <div className="grid grid-cols-4 gap-3">
             {[
-              { label: '相关视频', value: formatNum(total), color: 'var(--color-accent-blue)' },
-              { label: '本页播放', value: formatNum(biliResults.reduce((s, r) => s + r.play, 0)), color: 'var(--color-accent-green)' },
-              { label: '本页评论', value: formatNum(biliResults.reduce((s, r) => s + r.review, 0)), color: 'var(--color-accent-amber)' },
-              { label: '本页点赞', value: formatNum(biliResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
+              { label: '相关视频', value: formatNumber(total), color: 'var(--color-accent-blue)' },
+              { label: '本页播放', value: formatNumber(biliResults.reduce((s, r) => s + r.play, 0)), color: 'var(--color-accent-green)' },
+              { label: '本页评论', value: formatNumber(biliResults.reduce((s, r) => s + r.review, 0)), color: 'var(--color-accent-amber)' },
+              { label: '本页点赞', value: formatNumber(biliResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
             ].map(stat => (
               <div key={stat.label} className="p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-center">
                 <div className="text-lg font-bold" style={{ color: stat.color }}>{stat.value}</div>
@@ -399,8 +388,8 @@ function KeywordSearch() {
                   <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title}</div>
                   <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
                     <span>{r.author}</span>
-                    <span>{formatNum(r.play)}播放</span>
-                    <span>{formatNum(r.review)}评论</span>
+                    <span>{formatNumber(r.play)}播放</span>
+                    <span>{formatNumber(r.review)}评论</span>
                     <span>{r.duration}</span>
                   </div>
                 </div>
@@ -453,10 +442,10 @@ function KeywordSearch() {
           {/* Stats Cards */}
           <div className="grid grid-cols-4 gap-3">
             {[
-              { label: '相关笔记', value: formatNum(total), color: 'var(--color-accent-blue)' },
-              { label: '本页浏览', value: formatNum(xhsResults.reduce((s, r) => s + r.views, 0)), color: 'var(--color-accent-green)' },
-              { label: '本页评论', value: formatNum(xhsResults.reduce((s, r) => s + r.comments_count, 0)), color: 'var(--color-accent-amber)' },
-              { label: '本页点赞', value: formatNum(xhsResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
+              { label: '相关笔记', value: formatNumber(total), color: 'var(--color-accent-blue)' },
+              { label: '本页浏览', value: formatNumber(xhsResults.reduce((s, r) => s + r.views, 0)), color: 'var(--color-accent-green)' },
+              { label: '本页评论', value: formatNumber(xhsResults.reduce((s, r) => s + r.comments_count, 0)), color: 'var(--color-accent-amber)' },
+              { label: '本页点赞', value: formatNumber(xhsResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
             ].map(stat => (
               <div key={stat.label} className="p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-center">
                 <div className="text-lg font-bold" style={{ color: stat.color }}>{stat.value}</div>
@@ -503,9 +492,9 @@ function KeywordSearch() {
                   <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title || '无标题'}</div>
                   <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
                     <span>{r.author}</span>
-                    <span>{formatNum(r.views)}浏览</span>
-                    <span>{formatNum(r.comments_count)}评论</span>
-                    <span>{formatNum(r.likes)}赞</span>
+                    <span>{formatNumber(r.views)}浏览</span>
+                    <span>{formatNumber(r.comments_count)}评论</span>
+                    <span>{formatNumber(r.likes)}赞</span>
                   </div>
                 </div>
                 <button

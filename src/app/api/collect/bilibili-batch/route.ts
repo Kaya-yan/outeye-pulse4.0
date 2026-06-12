@@ -1,24 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { simpleHash, computeSampling, findExistingHashes } from '@/lib/hash';
+import { simpleHash, computeSampling, findExistingHashes, AD_PATTERN, sleep } from '@/lib/hash';
+import { BILI_HEADERS, type BiliReply, fetchVideoInfo, fetchReplies, fetchSubReplies } from '@/lib/bilibili-wbi';
 
 const supabase = createServerClient();
-
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Referer': 'https://www.bilibili.com',
-  'Accept': 'application/json',
-};
-
-interface BiliReply {
-  rpid: number;
-  content: { message: string };
-  like: number;
-  member: { uname: string };
-  ctime: number;
-  rcount: number;
-  replies?: BiliReply[];
-}
 
 /**
  * POST /api/collect/bilibili-batch
@@ -151,11 +136,10 @@ async function collectOne(
   }
 
   // Flatten
-  const adPattern = /加微信|私聊|优惠|折扣|代购|链接|下单|购买|vx|淘宝|拼多多/i;
   const flat: { text: string; likes: number; username: string; createTime: string; rpid: number }[] = [];
   const pushIfValid = (r: BiliReply) => {
     const text = r.content?.message?.trim();
-    if (text && text.length >= 2 && !adPattern.test(text)) {
+    if (text && text.length >= 2 && !AD_PATTERN.test(text)) {
       flat.push({ text, likes: r.like || 0, username: r.member?.uname || '', createTime: r.ctime ? new Date(r.ctime * 1000).toISOString() : '', rpid: r.rpid });
     }
   };
@@ -199,32 +183,3 @@ async function collectOne(
 
   return { bvid, title: videoInfo.title, imported, duplicates };
 }
-
-async function fetchVideoInfo(bvid: string) {
-  try {
-    const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data.code === 0 ? data.data : null;
-  } catch { return null; }
-}
-
-async function fetchReplies(oid: number, nextOffset: number, mode: number) {
-  const paginationStr = encodeURIComponent(JSON.stringify({ next_offset: String(nextOffset) }));
-  const url = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${oid}&mode=${mode}&pagination_str=${paginationStr}`;
-  const resp = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(15000) });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const data = await resp.json();
-  if (data.code !== 0) throw new Error(`API ${data.code}`);
-  return { replies: data.data?.replies || [], nextCursor: data.data?.cursor?.next || 0, isEnd: data.data?.cursor?.is_end === true };
-}
-
-async function fetchSubReplies(oid: number, rootRpid: number): Promise<BiliReply[]> {
-  const url = `https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${oid}&root=${rootRpid}&ps=20&pn=1`;
-  const resp = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
-  if (!resp.ok) return [];
-  const data = await resp.json();
-  return data.code === 0 ? data.data?.replies || [] : [];
-}
-
-function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }

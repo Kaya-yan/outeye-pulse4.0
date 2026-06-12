@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
+import { sleep } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -153,7 +154,7 @@ export async function POST(request: NextRequest) {
 
       // Small delay between batches to avoid rate limiting
       if (batchIdx < batches.length - 1) {
-        await new Promise(r => setTimeout(r, 1000));
+        await sleep(1000);
       }
     }
 
@@ -265,23 +266,21 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     throw new Error('Failed to parse AI JSON response');
   }
 
-  // Write results back to comments
-  let processed = 0;
-  for (let i = 0; i < batch.length; i++) {
-    if (i < analysisArray.length) {
-      const { error } = await supabase
-        .from('comments')
-        .update({
-          analysis: {
-            ...analysisArray[i],
-            model_version: 'mimo-v2.5-pro',
-            analyzed_at: new Date().toISOString(),
-          },
-        })
-        .eq('id', batch[i].id);
-      if (!error) processed++;
-    }
-  }
+  const updates = batch.slice(0, analysisArray.length).map((c, i) =>
+    supabase
+      .from('comments')
+      .update({
+        analysis: {
+          ...analysisArray[i],
+          model_version: 'mimo-v2.5-pro',
+          analyzed_at: new Date().toISOString(),
+        },
+      })
+      .eq('id', c.id)
+      .then(({ error }) => (error ? 0 : 1)),
+  );
+  const results = await Promise.all(updates);
+  const processed = results.reduce<number>((s, r) => s + r, 0);
 
   return {
     processed,
