@@ -96,6 +96,19 @@ export async function createPost(post: Partial<Post>): Promise<Post | null> {
   return data;
 }
 
+export async function updatePost(id: string, updates: Partial<Post>): Promise<boolean> {
+  const { error } = await supabase
+    .from('posts')
+    .update(updates)
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error updating post:', error);
+    return false;
+  }
+  return true;
+}
+
 export async function deletePost(id: string): Promise<boolean> {
   const { error } = await supabase
     .from('posts')

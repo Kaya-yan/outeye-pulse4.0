@@ -4,8 +4,6 @@ import Link from 'next/link';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { cn, formatNumber, getNarrativeLabel, getDimensionLabel, getDimensionPlainLabel, getChartInterpretation, NARRATIVE_COLORS } from '@/lib/utils';
-import { welchTTest } from '@/lib/statistics';
-import type { TTestResult } from '@/lib/statistics';
 import dynamic from 'next/dynamic';
 
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -14,26 +12,15 @@ const TABS = [
   { key: 'overview', label: '总览', desc: 'KPI + 研究发现' },
   { key: 'emotion', label: '情感地图', desc: '效价·唤醒·情感分布' },
   { key: 'narrative', label: '叙事分析', desc: '类型分布·平台交叉' },
-  { key: 'risk', label: '风险监测', desc: '伦理风险·高危评论' },
-  { key: 'compare', label: '统计检验', desc: 'AIGC vs 人工·t检验' },
-  { key: 'timeline', label: '时序对比', desc: '时间段对比·趋势分析' },
+  { key: 'risk', label: '风险监测', desc: '伦理风险·叙事风险交叉' },
+  { key: 'emotion-space', label: '情感空间', desc: 'Russell情感环·效价分布' },
+  { key: 'topic-mining', label: '主题挖掘', desc: '关键词频次·情感词统计' },
+  { key: 'identity-profile', label: '认同画像', desc: '六维雷达·认同画像' },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
 
-const DIMENSIONS = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
 const NARRATIVE_TYPES = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6'];
-
-function avgDim(arr: { analysis: any }[], dim: string): number {
-  if (arr.length === 0) return 0;
-  return arr.reduce((s, c) => s + (Number(c.analysis?.[dim]) || 0), 0) / arr.length;
-}
-
-function getDimValues(arr: { analysis: any }[], dim: string): number[] {
-  return arr
-    .filter(c => c.analysis?.[dim] != null && !isNaN(Number(c.analysis[dim])))
-    .map(c => Number(c.analysis[dim]));
-}
 
 // ─── Findings Generator ────────────────────────────────────────
 function generateFindings(posts: any[], comments: any[], analyzed: any[], isPlain: boolean): string[] {
@@ -419,131 +406,6 @@ function ExpandableComment({ comment }: { comment: any }) {
   );
 }
 
-// ─── Compare Tab ────────────────────────────────────────────────
-function CompareTab({ analyzed, posts, getDimLabel }: { analyzed: any[]; posts: any[]; getDimLabel: (d: string) => string }) {
-  const aigcPostIds = useMemo(() => new Set(posts.filter(p => p.is_aigc).map(p => p.id)), [posts]);
-  const aigcComments = useMemo(() => analyzed.filter(c => aigcPostIds.has(c.post_id)), [analyzed, aigcPostIds]);
-  const humanComments = useMemo(() => analyzed.filter(c => !aigcPostIds.has(c.post_id)), [analyzed, aigcPostIds]);
-
-  // Compute t-test results for each dimension
-  const tTestResults = useMemo(() => {
-    if (aigcComments.length < 2 || humanComments.length < 2) return null;
-    return DIMENSIONS.map(dim => {
-      const s1 = getDimValues(aigcComments, dim);
-      const s2 = getDimValues(humanComments, dim);
-      const result = welchTTest(s1, s2);
-      return { dim, ...result };
-    });
-  }, [aigcComments, humanComments]);
-
-  const radarOption = useMemo(() => {
-    if (aigcComments.length === 0 || humanComments.length === 0) return null;
-    return {
-      tooltip: {},
-      legend: { data: ['AIGC', '人工'], textStyle: { color: '#94A3B8', fontSize: 11 }, bottom: 0 },
-      radar: {
-        indicator: DIMENSIONS.map(d => ({ name: getDimLabel(d), max: 10 })),
-        shape: 'polygon' as const, splitNumber: 4,
-        axisName: { color: '#94A3B8', fontSize: 10 },
-        splitLine: { lineStyle: { color: '#1E293B' } },
-        splitArea: { areaStyle: { color: ['transparent'] } },
-        axisLine: { lineStyle: { color: '#334155' } },
-      },
-      series: [{
-        type: 'radar',
-        data: [
-          { value: DIMENSIONS.map(d => Number(avgDim(aigcComments, d).toFixed(2))), name: 'AIGC', areaStyle: { color: 'rgba(139, 92, 246, 0.15)' }, lineStyle: { color: '#8B5CF6', width: 2 }, itemStyle: { color: '#8B5CF6' } },
-          { value: DIMENSIONS.map(d => Number(avgDim(humanComments, d).toFixed(2))), name: '人工', areaStyle: { color: 'rgba(16, 185, 129, 0.15)' }, lineStyle: { color: '#10B981', width: 2 }, itemStyle: { color: '#10B981' } },
-        ],
-      }],
-    };
-  }, [aigcComments, humanComments, getDimLabel]);
-
-  if (analyzed.length === 0) return <EmptyState text="暂无分析数据" />;
-
-  if (aigcComments.length === 0 && humanComments.length === 0) {
-    return <EmptyState text="暂无数据可对比，请先采集内容" />;
-  }
-  if (aigcComments.length === 0) {
-    return <EmptyState text={`当前有 ${humanComments.length} 条人工内容，但没有 AIGC 内容。需要同时包含两种类型才能进行对比分析。`} />;
-  }
-  if (humanComments.length === 0) {
-    return <EmptyState text={`当前有 ${aigcComments.length} 条 AIGC 内容，但没有人工内容。需要同时包含两种类型才能进行对比分析。`} />;
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Radar */}
-      {radarOption && (
-        <div className="chart-academic animate-fade-in">
-          <div className="chart-title">AIGC vs 人工内容</div>
-          <div className="chart-subtitle">
-            AIGC ({aigcComments.length} 条) vs 人工 ({humanComments.length} 条) 的六维对比
-          </div>
-          <ReactECharts option={radarOption} style={{ height: 400 }} />
-          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
-            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{getChartInterpretation('aigc-radar')}</p>
-          </div>
-        </div>
-      )}
-
-      {/* T-Test Results Table */}
-      {tTestResults && (
-        <div className="chart-academic animate-fade-in stagger-1">
-          <div className="chart-title">Welch t 检验结果</div>
-          <div className="chart-subtitle">AIGC 组 vs 人工组的各维度差异检验</div>
-          <div className="overflow-x-auto mt-4">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[var(--color-border-subtle)]">
-                  <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal">维度</th>
-                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">AIGC 均值</th>
-                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">人工均值</th>
-                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">t 值</th>
-                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">p 值</th>
-                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">Cohen's d</th>
-                  <th className="text-center py-2 px-3 text-[var(--color-text-muted)] font-normal">显著性</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tTestResults.map(r => (
-                  <tr key={r.dim} className="border-b border-[var(--color-border-subtle)]/50">
-                    <td className="py-2 px-3 text-[var(--color-text-primary)]">{getDimLabel(r.dim)}</td>
-                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{r.mean1.toFixed(2)}</td>
-                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{r.mean2.toFixed(2)}</td>
-                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{r.t.toFixed(3)}</td>
-                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{r.p < 0.001 ? '<0.001' : r.p.toFixed(3)}</td>
-                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{r.cohensD.toFixed(3)}</td>
-                    <td className={cn('py-2 px-3 text-center font-mono font-bold', getSignificanceColor(r.significance))}>
-                      {r.significance}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
-            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-              *** p&lt;0.001 · ** p&lt;0.01 · * p&lt;0.05 · ? p&lt;0.10 · ns 不显著。
-              Cohen's d: 0.2=小效应, 0.5=中效应, 0.8=大效应。
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function getSignificanceColor(sig: string): string {
-  switch (sig) {
-    case '***': return 'text-[var(--color-accent-green)]';
-    case '**': return 'text-[var(--color-accent-green)]';
-    case '*': return 'text-[#7DCCA0]';
-    case '?': return 'text-[var(--color-accent-amber)]';
-    default: return 'text-[var(--color-text-muted)]';
-  }
-}
-
 // ─── Empty State ────────────────────────────────────────────────
 function EmptyState({ text }: { text: string }) {
   return (
@@ -553,194 +415,498 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-// ─── Timeline Tab ──────────────────────────────────────────────
-function TimelineTab({ analyzed, posts, getDimLabel, isPlain }: { analyzed: any[]; posts: any[]; getDimLabel: (d: string) => string; isPlain: boolean }) {
-  const [periodA, setPeriodA] = useState<'3m' | '6m' | '1y' | 'all'>('6m');
-  const [periodB, setPeriodB] = useState<'3m' | '6m' | '1y' | 'all'>('3m');
+// ─── Module 3: Identity Profile (认同画像) ──────────────────────
+function IdentityProfileTab({ analyzed, getDimLabel }: { analyzed: any[]; getDimLabel: (d: string) => string }) {
+  const DIM_KEYS = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
+  const DIM_LABELS = ['D1 认知深度', 'D2 情感效价', 'D2 情感唤醒', 'D3 认同层级', 'D4 行为意向', 'D5 叙事卷入', 'D6 伦理风险(反)'];
 
-  // Split analyzed comments into two time periods based on post collected_at
-  const postIdToTime = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of posts) {
-      map.set(p.id, new Date(p.collected_at || p.created_at).getTime());
-    }
-    return map;
-  }, [posts]);
-
-  const { groupA, groupB, labelA, labelB } = useMemo(() => {
-    if (analyzed.length === 0) return { groupA: [], groupB: [], labelA: '', labelB: '' };
-
-    const now = Date.now();
-    const getMs = (p: string) => p === '3m' ? 90 * 86400000 : p === '6m' ? 180 * 86400000 : p === '1y' ? 365 * 86400000 : now;
-    const cutoffA = now - getMs(periodA);
-    const cutoffB = now - getMs(periodB);
-
-    const withTime = analyzed.map(c => ({
-      ...c,
-      _time: postIdToTime.get(c.post_id) || 0,
-    }));
-
-    // Period A: older period (cutoffA to cutoffB)
-    // Period B: recent period (cutoffB to now)
-    const a = withTime.filter(c => c._time >= cutoffA && c._time < cutoffB);
-    const b = withTime.filter(c => c._time >= cutoffB);
-
-    const fmtDate = (ts: number) => new Date(ts).toLocaleDateString('zh-CN', { year: 'numeric', month: 'short' });
-
-    return {
-      groupA: a,
-      groupB: b,
-      labelA: `${fmtDate(cutoffA)} — ${fmtDate(cutoffB)}`,
-      labelB: `${fmtDate(cutoffB)} — ${fmtDate(now)}`,
-    };
-  }, [analyzed, postIdToTime, periodA, periodB]);
-
-  const tTestResults = useMemo(() => {
-    if (groupA.length < 2 || groupB.length < 2) return null;
-    return DIMENSIONS.map(dim => {
-      const s1 = groupA.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
-      const s2 = groupB.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
-      return { dim, ...welchTTest(s1, s2) };
+  const stats = useMemo(() => {
+    if (analyzed.length === 0) return null;
+    return DIM_KEYS.map((dim, i) => {
+      const values = analyzed
+        .filter(c => c.analysis?.[dim] != null && !isNaN(Number(c.analysis[dim])))
+        .map(c => Number(c.analysis[dim]));
+      if (values.length === 0) return { dim, label: DIM_LABELS[i], mean: 0, std: 0, min: 0, max: 0, n: 0 };
+      const mean = values.reduce((s, v) => s + v, 0) / values.length;
+      const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+      return {
+        dim,
+        label: DIM_LABELS[i],
+        mean: Number(mean.toFixed(3)),
+        std: Number(Math.sqrt(variance).toFixed(3)),
+        min: Math.min(...values),
+        max: Math.max(...values),
+        n: values.length,
+      };
     });
-  }, [groupA, groupB]);
+  }, [analyzed]);
 
   const radarOption = useMemo(() => {
-    if (groupA.length === 0 || groupB.length === 0) return null;
+    if (!stats || analyzed.length === 0) return null;
+    // Normalize to 0-10 scale for radar display
+    const maxVals = [10, 1, 1, 6, 5, 10, 1]; // max possible for each dim
+    const meanValues = stats.map((s, i) => {
+      // D6: invert (1 - risk) so higher = safer
+      if (s.dim === 'd6') return Number(((1 - s.mean) * 10).toFixed(2));
+      return Number(((s.mean / maxVals[i]) * 10).toFixed(2));
+    });
+
     return {
-      tooltip: {},
-      legend: { data: [labelA, labelB], textStyle: { color: '#94A3B8', fontSize: 11 }, bottom: 0 },
+      tooltip: { trigger: 'item' as const },
       radar: {
-        indicator: DIMENSIONS.map(d => ({ name: getDimLabel(d), max: d.startsWith('d2') ? 1 : d === 'd6' ? 10 : 10 })),
-        shape: 'polygon',
-        splitArea: { areaStyle: { color: ['rgba(91,141,239,0.02)', 'rgba(91,141,239,0.04)'] } },
-        axisLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } },
-        splitLine: { lineStyle: { color: 'rgba(148,163,184,0.1)' } },
+        indicator: DIM_LABELS.map(name => ({ name, max: 10 })),
+        shape: 'polygon' as const,
+        splitNumber: 5,
+        axisName: { color: '#94A3B8', fontSize: 10 },
+        splitLine: { lineStyle: { color: '#1E293B' } },
+        splitArea: { areaStyle: { color: ['rgba(59,130,246,0.02)', 'rgba(59,130,246,0.04)'] } },
+        axisLine: { lineStyle: { color: '#334155' } },
       },
       series: [{
         type: 'radar',
-        data: [
-          { value: DIMENSIONS.map(d => Number(avgDim(groupA, d).toFixed(2))), name: labelA, areaStyle: { color: 'rgba(245,158,11,0.15)' }, lineStyle: { color: '#F59E0B', width: 2 }, itemStyle: { color: '#F59E0B' } },
-          { value: DIMENSIONS.map(d => Number(avgDim(groupB, d).toFixed(2))), name: labelB, areaStyle: { color: 'rgba(16,185,129,0.15)' }, lineStyle: { color: '#10B981', width: 2 }, itemStyle: { color: '#10B981' } },
-        ],
+        data: [{
+          value: meanValues,
+          name: '均值',
+          areaStyle: { color: 'rgba(59,130,246,0.2)' },
+          lineStyle: { color: '#3B82F6', width: 2 },
+          itemStyle: { color: '#3B82F6' },
+        }],
       }],
     };
-  }, [groupA, groupB, labelA, labelB, getDimLabel]);
-
-  const barOption = useMemo(() => {
-    if (!tTestResults) return null;
-    return {
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-      xAxis: { type: 'category', data: tTestResults.map(r => getDimLabel(r.dim)), axisLabel: { fontSize: 10, color: '#94A3B8' } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#94A3B8' } },
-      series: [
-        { name: labelA, type: 'bar', data: tTestResults.map(r => Number(r.mean1.toFixed(3))), itemStyle: { color: '#F59E0B', borderRadius: [4, 4, 0, 0] } },
-        { name: labelB, type: 'bar', data: tTestResults.map(r => Number(r.mean2.toFixed(3))), itemStyle: { color: '#10B981', borderRadius: [4, 4, 0, 0] } },
-      ],
-    };
-  }, [tTestResults, labelA, labelB, getDimLabel]);
+  }, [stats, analyzed]);
 
   if (analyzed.length === 0) return <EmptyState text="暂无分析数据" />;
-
-  const PeriodSelect = ({ value, onChange, label }: { value: string; onChange: (v: any) => void; label: string }) => (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] text-[var(--color-text-muted)]">{label}</span>
-      {(['3m', '6m', '1y', 'all'] as const).map(p => (
-        <button
-          key={p}
-          onClick={() => onChange(p)}
-          className={cn(
-            'px-2 py-1 rounded text-[10px] transition-all',
-            value === p
-              ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
-              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-          )}
-        >
-          {p === '3m' ? '近3月' : p === '6m' ? '近半年' : p === '1y' ? '近1年' : '全部'}
-        </button>
-      ))}
-    </div>
-  );
+  if (!stats) return <EmptyState text="暂无统计数据" />;
 
   return (
     <div className="space-y-6">
-      {/* Period Selectors */}
-      <div className="glass-card p-5 animate-fade-in">
-        <div className="flex flex-col sm:flex-row gap-4">
-          <PeriodSelect value={periodA} onChange={setPeriodA} label="时间段 A（较早）" />
-          <PeriodSelect value={periodB} onChange={setPeriodB} label="时间段 B（较近）" />
-        </div>
-        <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">
-          A: {labelA} ({groupA.length} 条) &nbsp;|&nbsp; B: {labelB} ({groupB.length} 条)
-        </div>
-      </div>
-
-      {groupA.length < 2 || groupB.length < 2 ? (
-        <EmptyState text={`需要两个时间段各有至少 2 条已分析评论。当前 A: ${groupA.length} 条, B: ${groupB.length} 条。请调整时间范围或先采集更多数据。`} />
-      ) : (
-        <>
-          {/* Radar + Bar */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {radarOption && (
-              <div className="chart-academic animate-fade-in">
-                <div className="chart-title">维度雷达对比</div>
-                <div className="chart-subtitle">A ({groupA.length}) vs B ({groupB.length}) 的六维对比</div>
-                <ReactECharts option={radarOption} style={{ height: 350 }} />
-              </div>
-            )}
-            {barOption && (
-              <div className="chart-academic animate-fade-in">
-                <div className="chart-title">维度均值柱状图</div>
-                <div className="chart-subtitle">各维度在两个时间段的均值差异</div>
-                <ReactECharts option={barOption} style={{ height: 350 }} />
-              </div>
-            )}
-          </div>
-
-          {/* T-Test Table */}
-          {tTestResults && (
-            <div className="glass-card p-5 animate-fade-in">
-              <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">Welch's t 检验结果</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border-subtle)]">
-                      <th className="text-left py-2 pr-3 text-[var(--color-text-muted)]">维度</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">A 均值</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">B 均值</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">变化</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">t 值</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">p 值</th>
-                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">Cohen's d</th>
-                      <th className="text-right py-2 pl-2 text-[var(--color-text-muted)]">显著性</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tTestResults.map(r => {
-                      const change = r.mean2 - r.mean1;
-                      const changePct = r.mean1 !== 0 ? ((change / Math.abs(r.mean1)) * 100) : 0;
-                      return (
-                        <tr key={r.dim} className="border-b border-[var(--color-border-subtle)]/50">
-                          <td className="py-2 pr-3 text-[var(--color-text-primary)]">{getDimLabel(r.dim)}</td>
-                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)]">{r.mean1.toFixed(3)}</td>
-                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)]">{r.mean2.toFixed(3)}</td>
-                          <td className={cn('py-2 px-2 text-right font-medium', change > 0 ? 'text-[var(--color-accent-green)]' : change < 0 ? 'text-[var(--color-accent-red)]' : 'text-[var(--color-text-muted)]')}>
-                            {change > 0 ? '+' : ''}{changePct.toFixed(1)}%
-                          </td>
-                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.t.toFixed(3)}</td>
-                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.p < 0.001 ? '<0.001' : r.p.toFixed(3)}</td>
-                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.cohensD.toFixed(3)}</td>
-                          <td className="py-2 pl-2 text-right font-bold">{r.significance}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Radar Chart */}
+        <div className="chart-academic animate-fade-in">
+          <div className="chart-title">六维度认同画像</div>
+          <div className="chart-subtitle">基于 ELM-情感环-文化记忆-TPB-叙事传输-媒介伦理六维框架</div>
+          {radarOption ? (
+            <ReactECharts option={radarOption} style={{ height: 400 }} />
+          ) : (
+            <div className="h-[400px] flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              数据不足，无法生成雷达图
             </div>
           )}
-        </>
-      )}
+          <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+              D6 伦理风险取反向显示（1-风险值），使雷达图中高值=安全。各维度均归一化至 0-10 量纲。
+            </p>
+          </div>
+        </div>
+
+        {/* Stats Table */}
+        <div className="chart-academic animate-fade-in stagger-1">
+          <div className="chart-title">维度描述统计</div>
+          <div className="chart-subtitle">各维度均值、标准差、极值</div>
+          <div className="overflow-x-auto mt-4">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--color-border-subtle)]">
+                  <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal">维度</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">均值</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">标准差</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">最小值</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">最大值</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">N</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.map(s => (
+                  <tr key={s.dim} className="border-b border-[var(--color-border-subtle)]/50">
+                    <td className="py-2 px-3 text-[var(--color-text-primary)]">{s.label}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.mean.toFixed(3)}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.std.toFixed(3)}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.min.toFixed(2)}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.max.toFixed(2)}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Module 1: Emotion Space (情感空间) ─────────────────────────
+function EmotionSpaceTab({ analyzed }: { analyzed: any[] }) {
+  const D3_COLORS: Record<number, string> = { 1: '#60A5FA', 2: '#818CF8', 3: '#3B82F6' };
+  const D3_LABELS: Record<number, string> = { 1: '个体记忆', 2: '集体记忆', 3: '国家认同' };
+
+  const scatterOption = useMemo(() => {
+    const data = analyzed
+      .filter(c => c.analysis?.d2_valence != null && c.analysis?.d2_arousal != null)
+      .map(c => {
+        const d3 = Math.round(c.analysis.d3 || 1);
+        return {
+          value: [c.analysis.d2_valence, c.analysis.d2_arousal, c.likes || 0],
+          itemStyle: { color: D3_COLORS[d3] || '#64748B', opacity: 0.7 },
+          _text: (c.text || '').slice(0, 30),
+          _d3: d3,
+        };
+      });
+
+    return {
+      tooltip: {
+        trigger: 'item' as const,
+        formatter: (p: { value: number[]; data: { _text: string; _d3: number } }) =>
+          `效价: ${p.value[0]?.toFixed(2)}<br/>唤醒: ${p.value[1]?.toFixed(2)}<br/>点赞: ${p.value[2]}<br/>认同: ${D3_LABELS[p.data._d3] || '?'}<br/>${p.data._text}...`,
+      },
+      legend: {
+        data: ['个体记忆', '集体记忆', '国家认同'],
+        bottom: 0,
+        textStyle: { color: '#94A3B8', fontSize: 11 },
+      },
+      grid: { top: 30, right: 30, bottom: 50, left: 50 },
+      xAxis: {
+        name: '情感效价 (D2_valence)',
+        nameLocation: 'center',
+        nameGap: 30,
+        nameTextStyle: { color: '#94A3B8', fontSize: 11 },
+        type: 'value',
+        min: -1,
+        max: 1,
+        splitLine: { lineStyle: { color: '#1E293B' } },
+        axisLine: { lineStyle: { color: '#334155' } },
+        axisLabel: { color: '#64748B', fontSize: 10 },
+      },
+      yAxis: {
+        name: '情感唤醒 (D2_arousal)',
+        nameLocation: 'center',
+        nameGap: 35,
+        nameTextStyle: { color: '#94A3B8', fontSize: 11 },
+        type: 'value',
+        min: 0,
+        max: 1,
+        splitLine: { lineStyle: { color: '#1E293B' } },
+        axisLine: { lineStyle: { color: '#334155' } },
+        axisLabel: { color: '#64748B', fontSize: 10 },
+      },
+      series: [{
+        type: 'scatter',
+        symbolSize: (val: number[]) => Math.max(6, Math.min(25, val[2] / 50 + 6)),
+        data,
+        emphasis: { scale: 1.5 },
+      }],
+    };
+  }, [analyzed]);
+
+  const barOption = useMemo(() => {
+    const bins = [
+      { label: '负面\n(-1~-0.6)', min: -1, max: -0.6 },
+      { label: '偏负面\n(-0.6~-0.2)', min: -0.6, max: -0.2 },
+      { label: '中性\n(-0.2~+0.2)', min: -0.2, max: 0.2 },
+      { label: '偏正面\n(+0.2~+0.6)', min: 0.2, max: 0.6 },
+      { label: '正面\n(+0.6~+1)', min: 0.6, max: 1.01 },
+    ];
+    const counts = bins.map(b =>
+      analyzed.filter(c => {
+        const v = c.analysis?.d2_valence;
+        return v != null && v >= b.min && v < b.max;
+      }).length
+    );
+
+    return {
+      tooltip: { trigger: 'axis' as const, axisPointer: { type: 'shadow' as const } },
+      grid: { top: 20, right: 20, bottom: 60, left: 50 },
+      xAxis: {
+        type: 'category' as const,
+        data: bins.map(b => b.label),
+        axisLabel: { color: '#94A3B8', fontSize: 10 },
+      },
+      yAxis: {
+        type: 'value' as const,
+        name: '评论数',
+        nameTextStyle: { color: '#94A3B8', fontSize: 11 },
+        axisLabel: { color: '#64748B', fontSize: 10 },
+        splitLine: { lineStyle: { color: '#1E293B' } },
+      },
+      series: [{
+        type: 'bar',
+        data: counts,
+        itemStyle: {
+          color: (params: { dataIndex: number }) => {
+            const colors = ['#EF4444', '#F59E0B', '#6B7280', '#10B981', '#3B82F6'];
+            return colors[params.dataIndex] || '#3B82F6';
+          },
+          borderRadius: [4, 4, 0, 0],
+        },
+        barWidth: '60%',
+      }],
+    };
+  }, [analyzed]);
+
+  if (analyzed.length === 0) return <EmptyState text="暂无分析数据" />;
+
+  return (
+    <div className="space-y-6">
+      <div className="chart-academic animate-fade-in">
+        <div className="chart-title">情感空间散点图</div>
+        <div className="chart-subtitle">Russell 情感环状模型：效价 × 唤醒度（颜色=D3认同层级，大小=点赞数）</div>
+        <ReactECharts option={scatterOption} style={{ height: 400 }} />
+      </div>
+      <div className="chart-academic animate-fade-in stagger-1">
+        <div className="chart-title">情感效价分布</div>
+        <div className="chart-subtitle">评论情感效价五段分布统计</div>
+        <ReactECharts option={barOption} style={{ height: 300 }} />
+        <div className="mt-3 p-3 bg-[var(--color-bg-deep)] rounded-lg border border-[var(--color-border-subtle)]">
+          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">基于 Russell 情感环状模型，将情感效价（D2_valence）分为五个区间进行统计。</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Module 2: Topic Mining (主题挖掘) ──────────────────────────
+function TopicMiningTab({ comments }: { comments: any[] }) {
+  const STOPWORDS = new Set([
+    '的', '了', '是', '我', '你', '他', '她', '它', '们', '在', '有', '和', '就', '不', '人',
+    '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有',
+    '看', '好', '自己', '这', '那', '她', '他', '吗', '什么', '啊', '呢', '吧', '哦', '嗯',
+    '哈', '呀', '哇', '啦', '么', '吗', '把', '被', '给', '让', '用', '向', '从', '以',
+    '而', '但', '还', '所以', '因为', '如果', '虽然', '可以', '这个', '那个', '怎么',
+    '真的', '真', '太', '最', '更', '比较', '非常', '特别', '已经', '还是', '只是',
+    '不是', '没有', '没', '能', '会', '应该', '可能', '已', '才', '又', '再', '也',
+    '过', '来', '去', '做', '对', '里', '中', '下', '大', '小', '多', '少',
+  ]);
+
+  const POSITIVE_WORDS = ['感动', '致敬', '震撼', '伟大', '泪目', '敬佩', '英雄', '铭记'];
+  const NEGATIVE_WORDS = ['假', '消费', '质疑', '无感', '过度', '商业化', '失真', '炒作'];
+  const NEUTRAL_WORDS = ['技术', '修复', '历史', '影像', 'AI', '生成', '数字', '纪念馆'];
+
+  const { topWords, sentimentTable } = useMemo(() => {
+    const allText = comments.map(c => c.text || '').join('');
+    // Simple tokenization: split by punctuation and spaces
+    const tokens = allText
+      .replace(/[，。！？、；：""''（）【】《》\s\.\,\!\?\;\:\"\'\(\)\[\]\{\}\<\>\/\\~`@#\$%\^&\*\-_\+=|]+/g, ' ')
+      .split(' ')
+      .filter(w => w.length >= 2 && !STOPWORDS.has(w));
+
+    const freq = new Map<string, number>();
+    for (const t of tokens) {
+      freq.set(t, (freq.get(t) || 0) + 1);
+    }
+
+    const topWords = Array.from(freq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([word, count]) => ({ word, count }));
+
+    // Sentiment word counts
+    const sentimentTable = [
+      ...POSITIVE_WORDS.map(w => ({ word: w, count: freq.get(w) || 0, polarity: '正面' as const })),
+      ...NEGATIVE_WORDS.map(w => ({ word: w, count: freq.get(w) || 0, polarity: '负面' as const })),
+      ...NEUTRAL_WORDS.map(w => ({ word: w, count: freq.get(w) || 0, polarity: '中性' as const })),
+    ];
+
+    return { topWords, sentimentTable };
+  }, [comments]);
+
+  const barOption = useMemo(() => ({
+    tooltip: { trigger: 'axis' as const, axisPointer: { type: 'shadow' as const } },
+    grid: { top: 10, right: 30, bottom: 20, left: 80 },
+    xAxis: {
+      type: 'value' as const,
+      axisLabel: { color: '#64748B', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1E293B' } },
+    },
+    yAxis: {
+      type: 'category' as const,
+      data: topWords.map(w => w.word).reverse(),
+      axisLabel: { color: '#94A3B8', fontSize: 11 },
+    },
+    series: [{
+      type: 'bar',
+      data: topWords.map(w => w.count).reverse(),
+      itemStyle: { color: '#3B82F6', borderRadius: [0, 4, 4, 0] },
+      barWidth: '60%',
+    }],
+  }), [topWords]);
+
+  if (comments.length === 0) return <EmptyState text="暂无评论数据" />;
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Keyword Frequency */}
+        <div className="chart-academic animate-fade-in">
+          <div className="chart-title">高频关键词 TOP 20</div>
+          <div className="chart-subtitle">前端分词提取，过滤停用词</div>
+          {topWords.length > 0 ? (
+            <ReactECharts option={barOption} style={{ height: 400 }} />
+          ) : (
+            <div className="h-[400px] flex items-center justify-center text-xs text-[var(--color-text-muted)]">
+              未提取到有效关键词
+            </div>
+          )}
+        </div>
+
+        {/* Sentiment Word Table */}
+        <div className="chart-academic animate-fade-in stagger-1">
+          <div className="chart-title">情感词频统计</div>
+          <div className="chart-subtitle">预设情感词库匹配统计</div>
+          <div className="overflow-x-auto mt-4 max-h-[400px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--color-border-subtle)]">
+                  <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal">词</th>
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">出现次数</th>
+                  <th className="text-center py-2 px-3 text-[var(--color-text-muted)] font-normal">情感极性</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sentimentTable.map(s => (
+                  <tr key={s.word} className="border-b border-[var(--color-border-subtle)]/50">
+                    <td className="py-2 px-3 text-[var(--color-text-primary)]">{s.word}</td>
+                    <td className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">{s.count}</td>
+                    <td className={cn(
+                      'py-2 px-3 text-center',
+                      s.polarity === '正面' ? 'text-[var(--color-accent-green)]' :
+                      s.polarity === '负面' ? 'text-[var(--color-accent-red)]' :
+                      'text-[var(--color-text-muted)]'
+                    )}>
+                      {s.polarity}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Module 4: Narrative & Risk (叙事与风险分组) ────────────────
+function NarrativeRiskTab({ analyzed }: { analyzed: any[] }) {
+  const NARRATIVE_MAP: Record<string, string> = {
+    T1: '历史叙事', T2: '个人叙事', T3: '技术叙事', T4: '情感叙事', T5: '批判叙事', T6: '其他',
+  };
+  const RISK_LEVELS = ['safe', 'low', 'medium', 'high'];
+  const RISK_LABELS: Record<string, string> = { safe: '无风险', low: '低风险', medium: '中风险', high: '高风险' };
+  const RISK_COLORS: Record<string, string> = { safe: '#3B82F6', low: '#6EE7B7', medium: '#F59E0B', high: '#EF4444' };
+
+  const crossTable = useMemo(() => {
+    const table: Record<string, Record<string, number>> = {};
+    const narrativeTypes = ['T1', 'T2', 'T3', 'T4', 'T5'];
+    for (const nt of narrativeTypes) {
+      table[nt] = {};
+      for (const rl of RISK_LEVELS) {
+        table[nt][rl] = 0;
+      }
+    }
+    for (const c of analyzed) {
+      const nt = c.analysis?.narrative_type;
+      const rl = c.analysis?.risk_level;
+      if (nt && table[nt] && rl && RISK_LEVELS.includes(rl)) {
+        table[nt][rl]++;
+      }
+    }
+    return table;
+  }, [analyzed]);
+
+  const barOption = useMemo(() => {
+    const narrativeTypes = ['T1', 'T2', 'T3', 'T4', 'T5'];
+    return {
+      tooltip: { trigger: 'axis' as const, axisPointer: { type: 'shadow' as const } },
+      legend: {
+        data: RISK_LEVELS.map(rl => RISK_LABELS[rl]),
+        bottom: 0,
+        textStyle: { color: '#94A3B8', fontSize: 11 },
+      },
+      grid: { top: 20, right: 20, bottom: 50, left: 50 },
+      xAxis: {
+        type: 'category' as const,
+        data: narrativeTypes.map(nt => NARRATIVE_MAP[nt]),
+        axisLabel: { color: '#94A3B8', fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value' as const,
+        name: '评论数',
+        nameTextStyle: { color: '#94A3B8', fontSize: 11 },
+        axisLabel: { color: '#64748B', fontSize: 10 },
+        splitLine: { lineStyle: { color: '#1E293B' } },
+      },
+      series: RISK_LEVELS.map(rl => ({
+        name: RISK_LABELS[rl],
+        type: 'bar' as const,
+        stack: 'total',
+        data: narrativeTypes.map(nt => crossTable[nt]?.[rl] || 0),
+        itemStyle: { color: RISK_COLORS[rl], borderRadius: [2, 2, 0, 0] },
+      })),
+    };
+  }, [crossTable]);
+
+  if (analyzed.length === 0) return <EmptyState text="暂无分析数据" />;
+
+  const narrativeTypes = ['T1', 'T2', 'T3', 'T4', 'T5'];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Grouped Bar Chart */}
+        <div className="chart-academic animate-fade-in">
+          <div className="chart-title">叙事类型 × 风险等级</div>
+          <div className="chart-subtitle">基于叙事传输理论与媒介伦理框架</div>
+          <ReactECharts option={barOption} style={{ height: 400 }} />
+        </div>
+
+        {/* Cross Table */}
+        <div className="chart-academic animate-fade-in stagger-1">
+          <div className="chart-title">交叉统计表</div>
+          <div className="chart-subtitle">叙事类型 × 风险等级 评论数量矩阵</div>
+          <div className="overflow-x-auto mt-4">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--color-border-subtle)]">
+                  <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal">叙事类型</th>
+                  {RISK_LEVELS.map(rl => (
+                    <th key={rl} className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">{RISK_LABELS[rl]}</th>
+                  ))}
+                  <th className="text-right py-2 px-3 text-[var(--color-text-muted)] font-normal">合计</th>
+                </tr>
+              </thead>
+              <tbody>
+                {narrativeTypes.map(nt => {
+                  const rowTotal = RISK_LEVELS.reduce((s, rl) => s + (crossTable[nt]?.[rl] || 0), 0);
+                  return (
+                    <tr key={nt} className="border-b border-[var(--color-border-subtle)]/50">
+                      <td className="py-2 px-3 text-[var(--color-text-primary)]">{NARRATIVE_MAP[nt]}</td>
+                      {RISK_LEVELS.map(rl => (
+                        <td key={rl} className="py-2 px-3 text-right text-[var(--color-text-secondary)] font-mono">
+                          {crossTable[nt]?.[rl] || 0}
+                        </td>
+                      ))}
+                      <td className="py-2 px-3 text-right text-[var(--color-text-primary)] font-mono font-medium">{rowTotal}</td>
+                    </tr>
+                  );
+                })}
+                {/* Column totals */}
+                <tr className="border-t-2 border-[var(--color-border-subtle)]">
+                  <td className="py-2 px-3 text-[var(--color-text-primary)] font-medium">合计</td>
+                  {RISK_LEVELS.map(rl => {
+                    const colTotal = narrativeTypes.reduce((s, nt) => s + (crossTable[nt]?.[rl] || 0), 0);
+                    return (
+                      <td key={rl} className="py-2 px-3 text-right text-[var(--color-text-primary)] font-mono font-medium">{colTotal}</td>
+                    );
+                  })}
+                  <td className="py-2 px-3 text-right text-[var(--color-text-primary)] font-mono font-bold">
+                    {narrativeTypes.reduce((s, nt) => s + RISK_LEVELS.reduce((ss, rl) => ss + (crossTable[nt]?.[rl] || 0), 0), 0)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -870,9 +1036,10 @@ export default function AnalyzePage() {
         {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={analysisProgress?.status === 'processing'} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} />}
         {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} isPlain={isPlain} />}
         {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} isPlain={isPlain} />}
-        {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}
-        {activeTab === 'compare' && <CompareTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} />}
-        {activeTab === 'timeline' && <TimelineTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} isPlain={isPlain} />}
+        {activeTab === 'risk' && <NarrativeRiskTab analyzed={analyzedComments} />}
+        {activeTab === 'emotion-space' && <EmotionSpaceTab analyzed={analyzedComments} />}
+        {activeTab === 'topic-mining' && <TopicMiningTab comments={comments} />}
+        {activeTab === 'identity-profile' && <IdentityProfileTab analyzed={analyzedComments} getDimLabel={getDimLabel} />}
       </div>
     </div>
   );

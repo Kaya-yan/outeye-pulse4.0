@@ -1,18 +1,23 @@
 'use client';
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
 import { useChartStore } from '@/stores/useChartStore';
 import { computeDemoStats } from '@/lib/demo-data';
-import { cn, formatNumber, formatPercent, getDimensionLabel, getNarrativeLabel, NARRATIVE_COLORS } from '@/lib/utils';
+import { cn, formatNumber, formatPercent, getDimensionLabel, getNarrativeLabel, getRiskLabel, getRiskColor, NARRATIVE_COLORS } from '@/lib/utils';
+import { AIGC_TYPE_LABELS } from '@/types';
+import type { AigcType } from '@/types';
 import dynamic from 'next/dynamic';
 
 // Dynamic import for ECharts to avoid SSR issues
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 
 export default function DashboardPage() {
-  const { posts, comments, filters, setFilters } = useAppStore();
+  const { posts, comments, filters, setFilters, setSelectedPostId } = useAppStore();
   const { selectedNarrativeType, selectedRiskLevel, setSelectedNarrativeType, setSelectedRiskLevel, clearSelections } = useChartStore();
+  const router = useRouter();
+  const [showWorkComparison, setShowWorkComparison] = useState(false);
 
   const stats = useMemo(() => {
     if (posts.length === 0) return null;
@@ -515,6 +520,101 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {/* Works Overview */}
+      {posts.length > 0 && (
+        <div className="glass-card p-5 animate-fade-in">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-semibold text-[#F8FAFC]">作品概览</h3>
+              <p className="text-xs text-[#64748B] mt-0.5">{posts.length} 部作品</p>
+            </div>
+            {posts.length >= 2 && (
+              <button
+                onClick={() => setShowWorkComparison(!showWorkComparison)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-[#8B5CF6]/10 text-[#A78BFA] border border-[#8B5CF6]/30 hover:bg-[#8B5CF6]/20 transition-colors"
+              >
+                {showWorkComparison ? '收起' : '展开'}作品对比
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {posts.map(post => {
+              const postComments = comments.filter(c => c.post_id === post.id);
+              const analyzed = postComments.filter(c => c.analysis?.d2_valence != null);
+              const avgValence = analyzed.length > 0
+                ? analyzed.reduce((s, c) => s + (c.analysis!.d2_valence ?? 0), 0) / analyzed.length
+                : 0;
+
+              return (
+                <button
+                  key={post.id}
+                  onClick={() => {
+                    setSelectedPostId(post.id);
+                    router.push('/analyze');
+                  }}
+                  className="glass-card p-4 text-left hover:border-[#3B82F6]/50 transition-all group"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                      style={{
+                        backgroundColor: post.platform === 'bilibili' ? '#00A1D620' : '#FE2C5520',
+                        color: post.platform === 'bilibili' ? '#00A1D6' : '#FE2C55',
+                      }}
+                    >
+                      {post.platform === 'bilibili' ? 'B站' : '小红书'}
+                    </span>
+                    {post.is_aigc && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#8B5CF6]/20 text-[#A78BFA]">AIGC</span>
+                    )}
+                    {post.aigc_type && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#FBBF24]">
+                        {AIGC_TYPE_LABELS[post.aigc_type as AigcType]}
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="text-xs font-medium text-[#F8FAFC] truncate mb-3 group-hover:text-[#60A5FA] transition-colors" title={post.title}>
+                    {post.title || '(无标题)'}
+                  </h4>
+                  <div className="flex items-center justify-between">
+                    <div className="text-center">
+                      <div className="text-[10px] text-[#64748B]">评论</div>
+                      <div className="text-sm font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>
+                        {postComments.length}
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[10px] text-[#64748B]">情感效价</div>
+                      <div
+                        className={cn(
+                          'text-sm font-bold',
+                          avgValence > 0.1 ? 'text-[#10B981]' : avgValence < -0.1 ? 'text-[#EF4444]' : 'text-[#F8FAFC]'
+                        )}
+                        style={{ fontFamily: 'var(--font-jetbrains-mono)' }}
+                      >
+                        {avgValence.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[10px] text-[#64748B]">播放</div>
+                      <div className="text-sm font-bold text-[#F8FAFC]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>
+                        {formatNumber(post.view_count || 0)}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Multi-work Comparison */}
+          {showWorkComparison && posts.length >= 2 && (
+            <WorkComparisonChart posts={posts} comments={comments} />
+          )}
+        </div>
+      )}
+
       {/* Chart Linking Indicator */}
       {(selectedNarrativeType || selectedRiskLevel) && (
         <div className="glass-card p-3 animate-fade-in flex items-center justify-between">
@@ -598,6 +698,157 @@ export default function DashboardPage() {
             onEvents={{ click: onHeatmapClick }}
           />
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Work Comparison Chart ────────────────────────────────────────
+
+function WorkComparisonChart({ posts, comments }: { posts: import('@/types').Post[]; comments: import('@/types').Comment[] }) {
+  const dimensions = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
+  const dimLabels = dimensions.map(d => getDimensionLabel(d));
+  const WORK_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
+
+  const comparisonOption = useMemo(() => {
+    const series = posts.map((post, idx) => {
+      const postComments = comments.filter(c => c.post_id === post.id && c.analysis);
+      const values = dimensions.map(d => {
+        const vals = postComments
+          .map(c => c.analysis?.[d as keyof typeof c.analysis])
+          .filter((v): v is number => typeof v === 'number');
+        return vals.length > 0 ? +(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : 0;
+      });
+
+      return {
+        name: post.title?.slice(0, 20) || post.id.slice(0, 8),
+        type: 'bar' as const,
+        data: values,
+        itemStyle: { color: WORK_COLORS[idx % WORK_COLORS.length] },
+        barGap: '15%',
+      };
+    });
+
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis' as const,
+        backgroundColor: '#0B1221',
+        borderColor: '#1E293B',
+        textStyle: { color: '#F8FAFC' },
+      },
+      legend: {
+        data: series.map(s => s.name),
+        bottom: 0,
+        textStyle: { color: '#94A3B8', fontSize: 11 },
+      },
+      grid: { top: 30, right: 20, bottom: 50, left: 50 },
+      xAxis: {
+        type: 'category' as const,
+        data: dimLabels,
+        axisLine: { lineStyle: { color: '#1E293B' } },
+        axisLabel: { color: '#94A3B8', fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value' as const,
+        axisLine: { lineStyle: { color: '#1E293B' } },
+        axisLabel: { color: '#64748B' },
+        splitLine: { lineStyle: { color: '#1E293B', type: 'dashed' as const } },
+      },
+      series,
+    };
+  }, [posts, comments]);
+
+  const comparisonTable = useMemo(() => {
+    return posts.map(post => {
+      const postComments = comments.filter(c => c.post_id === post.id);
+      const analyzed = postComments.filter(c => c.analysis);
+      const dimAvgs: Record<string, number> = {};
+
+      for (const d of dimensions) {
+        const vals = analyzed
+          .map(c => c.analysis?.[d as keyof typeof c.analysis])
+          .filter((v): v is number => typeof v === 'number');
+        dimAvgs[d] = vals.length > 0 ? +(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : 0;
+      }
+
+      const riskDist = { safe: 0, low: 0, medium: 0, high: 0 };
+      for (const c of analyzed) {
+        const rl = c.analysis?.risk_level;
+        if (rl && rl in riskDist) riskDist[rl]++;
+      }
+
+      return {
+        id: post.id,
+        title: post.title || '(无标题)',
+        platform: post.platform,
+        commentCount: postComments.length,
+        analyzedCount: analyzed.length,
+        dimAvgs,
+        riskDist,
+      };
+    });
+  }, [posts, comments]);
+
+  return (
+    <div className="mt-6 space-y-4 border-t border-[#1E293B] pt-6">
+      <h4 className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider">六维度分组柱状图</h4>
+      <ReactECharts option={comparisonOption} style={{ height: 300 }} />
+
+      <h4 className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wider mt-4">详细数据表</h4>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-[#1E293B]">
+              <th className="text-left py-2 px-3 text-[#94A3B8] font-medium">作品</th>
+              <th className="text-center py-2 px-2 text-[#94A3B8] font-medium">评论</th>
+              {dimLabels.map(l => (
+                <th key={l} className="text-center py-2 px-2 text-[#94A3B8] font-medium">{l}</th>
+              ))}
+              <th className="text-center py-2 px-2 text-[#94A3B8] font-medium">风险</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparisonTable.map(row => (
+              <tr key={row.id} className="border-b border-[#1E293B]/50 hover:bg-[#0B1221]/50">
+                <td className="py-2 px-3 text-[#F8FAFC] max-w-[120px] truncate" title={row.title}>
+                  <span
+                    className="inline-block w-2 h-2 rounded-full mr-1.5"
+                    style={{ backgroundColor: row.platform === 'bilibili' ? '#00A1D6' : '#FE2C55' }}
+                  />
+                  {row.title}
+                </td>
+                <td className="text-center py-2 px-2 text-[#94A3B8]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>
+                  {row.commentCount}
+                </td>
+                {dimensions.map(d => (
+                  <td key={d} className="text-center py-2 px-2 text-[#94A3B8]" style={{ fontFamily: 'var(--font-jetbrains-mono)' }}>
+                    {row.dimAvgs[d]}
+                  </td>
+                ))}
+                <td className="text-center py-2 px-2">
+                  <div className="flex items-center justify-center gap-1">
+                    {(['safe', 'low', 'medium', 'high'] as const).map(level => (
+                      row.riskDist[level] > 0 && (
+                        <span
+                          key={level}
+                          className="text-[10px] px-1 py-0.5 rounded"
+                          style={{
+                            backgroundColor: getRiskColor(level) + '20',
+                            color: getRiskColor(level),
+                          }}
+                          title={`${getRiskLabel(level)}: ${row.riskDist[level]}`}
+                        >
+                          {row.riskDist[level]}
+                        </span>
+                      )
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

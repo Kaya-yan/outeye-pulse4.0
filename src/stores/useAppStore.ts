@@ -17,6 +17,8 @@ interface AppState {
   // Posts
   posts: Post[];
   setPosts: (posts: Post[]) => void;
+  addPost: (post: Post) => void;
+  updatePost: (post: Post) => void;
   removePost: (id: string) => void;
 
   // Comments
@@ -94,6 +96,10 @@ export const useAppStore = create<AppState>()(
       // Posts
       posts: [],
       setPosts: (posts) => set({ posts }),
+      addPost: (post) => set((state) => ({ posts: [...state.posts, post] })),
+      updatePost: (post) => set((state) => ({
+        posts: state.posts.map(p => p.id === post.id ? post : p),
+      })),
       removePost: (id) => set((state) => ({
         posts: state.posts.filter(p => p.id !== id),
         comments: state.comments.filter(c => c.post_id !== id),

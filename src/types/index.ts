@@ -17,19 +17,34 @@ export interface SamplingConfig {
   batch_size: number;
 }
 
+export type AigcType = 'ai_restore' | 'ai_image' | 'digital_human' | 'ai_dub' | 'documentary' | 'drama' | 'other';
+
+export const AIGC_TYPE_LABELS: Record<AigcType, string> = {
+  ai_restore: 'AI影像修复',
+  ai_image: 'AI生成图像',
+  digital_human: '数字人讲述',
+  ai_dub: 'AI配音',
+  documentary: '传统纪录片',
+  drama: '情景剧',
+  other: '其他',
+};
+
 export interface Post {
   id: string;
   project_id: string;
   platform: 'xhs' | 'bilibili';
   title?: string;
   content?: string;
+  description?: string;
   author_id_hash?: string;
   author_name_mask?: string;
+  creator_name?: string;
   likes: number;
+  view_count: number;
   comments_count: number;
   shares: number;
   is_aigc: boolean;
-  aigc_type?: 'ai_image' | 'ai_video' | 'ai_text' | 'human_image' | 'human_video' | 'human_text' | 'uncertain';
+  aigc_type?: AigcType;
   narrative_type?: 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6';
   url: string;
   publish_time?: string;

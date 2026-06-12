@@ -59,7 +59,9 @@ export async function POST(request: NextRequest) {
           url: sourceUrl,
           title: videoInfo.title,
           author_name_mask: videoInfo.owner?.name || '',
+          creator_name: videoInfo.owner?.name || '',
           likes: videoInfo.stat?.like || 0,
+          view_count: videoInfo.stat?.view || 0,
           collected_by: 'quick-collect',
           is_aigc: false,
         })
