@@ -747,7 +747,7 @@ function TimelineTab({ analyzed, posts, getDimLabel, isPlain }: { analyzed: any[
 
 // ─── Main Page ──────────────────────────────────────────────────
 export default function AnalyzePage() {
-  const { posts, comments, setPosts, setComments, setProjects, setCurrentProject, currentProject, terminologyMode, setTerminologyMode, activeAnalysisLogId, setActiveAnalysisLogId, setAnalysisProgress } = useAppStore();
+  const { posts, comments, setPosts, setComments, setProjects, setCurrentProject, currentProject, terminologyMode, setTerminologyMode, analysisProgress, setAnalysisProgress } = useAppStore();
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -783,17 +783,14 @@ export default function AnalyzePage() {
     setAnalysisTriggering(true);
     const { runAnalysis } = await import('@/lib/analysis-runner');
     await runAnalysis(currentProject.id, undefined, {
-      onProgress: (processed, total, progress) => {
+      onProgress: (processed, total) => {
         setAnalysisProgress({ processed, total, status: 'processing' });
-        setActiveAnalysisLogId('running');
       },
-      onDone: (processed, failed, total) => {
-        setActiveAnalysisLogId(null);
+      onDone: (processed, _failed, total) => {
         setAnalysisProgress({ processed, total, status: 'completed' });
-        loadData(); // Refresh to show analyzed data
+        loadData();
       },
       onError: (error) => {
-        setActiveAnalysisLogId(null);
         setAnalysisProgress({ processed: 0, total: 0, status: 'failed' });
         console.error('Analysis error:', error);
       },
@@ -870,7 +867,7 @@ export default function AnalyzePage() {
 
       {/* Tab Content */}
       <div className="animate-fade-in">
-        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={!!activeAnalysisLogId} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} />}
+        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={analysisProgress?.status === 'processing'} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} />}
         {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} isPlain={isPlain} />}
         {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} isPlain={isPlain} />}
         {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}

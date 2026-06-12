@@ -37,7 +37,7 @@ function ModeSwitch({ mode, onChange }: { mode: CollectMode; onChange: (m: Colle
 
 // ─── Keyword Search ────────────────────────────────────────────
 function KeywordSearch() {
-  const { currentProject, posts, setPosts, setComments, setActiveAnalysisLogId, setAnalysisProgress } = useAppStore();
+  const { currentProject, posts, setPosts, setComments, setAnalysisProgress } = useAppStore();
   const [keyword, setKeyword] = useState('');
   const [platform, setPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
   const [searching, setSearching] = useState(false);
@@ -173,7 +173,7 @@ function KeywordSearch() {
           setComments(c);
           // Trigger AI analysis after collection
           if (data.imported > 0) {
-            triggerAnalysis(currentProject.id, data.post_id, setActiveAnalysisLogId, setAnalysisProgress);
+            triggerAnalysis(currentProject.id, data.post_id, setAnalysisProgress);
           }
           if (searchTaskId && data.post_id) {
             const searchResults = await fetchSearchResults(searchTaskId);
@@ -227,7 +227,7 @@ function KeywordSearch() {
           setComments(c);
           // Trigger AI analysis after batch collection
           if (data.total_imported > 0) {
-            triggerAnalysis(currentProject.id, undefined, setActiveAnalysisLogId, setAnalysisProgress);
+            triggerAnalysis(currentProject.id, undefined, setAnalysisProgress);
           }
         }
       } catch { /* ignore */ }
@@ -570,7 +570,6 @@ function KeywordSearch() {
 async function triggerAnalysis(
   projectId: string,
   postId: string | undefined,
-  setActiveAnalysisLogId: (id: string | null) => void,
   setAnalysisProgress: (p: { processed: number; total: number; status: string }) => void,
 ): Promise<boolean> {
   try {
@@ -578,14 +577,12 @@ async function triggerAnalysis(
     runAnalysis(projectId, postId, {
       onProgress: (processed, total) => {
         setAnalysisProgress({ processed, total, status: 'processing' });
-        setActiveAnalysisLogId('running');
       },
       onDone: (processed, _failed, total) => {
-        setActiveAnalysisLogId(null);
         setAnalysisProgress({ processed, total, status: 'completed' });
       },
       onError: () => {
-        setActiveAnalysisLogId(null);
+        setAnalysisProgress({ processed: 0, total: 0, status: 'failed' });
       },
     });
     return true;
@@ -601,7 +598,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [result, setResult] = useState<{
     imported: number; duplicates: number; video_title: string; post_id: string; analysisTriggered: boolean;
   } | null>(null);
-  const { setActiveAnalysisLogId, setAnalysisProgress, currentProject } = useAppStore();
+  const { setAnalysisProgress, currentProject } = useAppStore();
   const router = useRouter();
 
   const detectPlatform = (u: string): 'bilibili' | 'xhs' | null => {
@@ -634,7 +631,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
         } else {
           let analysisTriggered = false;
           if (data.imported > 0 && currentProject) {
-            analysisTriggered = await triggerAnalysis(currentProject.id, data.post_id, setActiveAnalysisLogId, setAnalysisProgress);
+            analysisTriggered = await triggerAnalysis(currentProject.id, data.post_id, setAnalysisProgress);
           }
           setResult({
             imported: data.imported,
