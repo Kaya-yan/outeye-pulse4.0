@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
 import { cn } from '@/lib/utils';
-import { createProject, deletePost as deletePostApi } from '@/lib/supabase-service';
+import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects } from '@/lib/supabase-service';
+import type { RawComment } from '@/lib/supabase-service';
 
 // ─── Hero URL Input ────────────────────────────────────────────
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
@@ -283,6 +284,178 @@ function RecentCollections() {
   );
 }
 
+// ─── Pending Raw Comments (Bookmarklet) ───────────────────────
+function PendingRawComments() {
+  const { currentProject, posts, setPosts, setComments } = useAppStore();
+  const [groups, setGroups] = useState<{ sourceId: string; sourceUrl: string; platform: string; comments: RawComment[] }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [linking, setLinking] = useState<string | null>(null);
+
+  const loadPending = useCallback(async () => {
+    setLoading(true);
+    const raw = await fetchPendingRawComments();
+    const grouped = new Map<string, { sourceUrl: string; platform: string; comments: RawComment[] }>();
+    for (const r of raw) {
+      const key = r.source_id;
+      if (!grouped.has(key)) {
+        grouped.set(key, { sourceUrl: r.source_url || '', platform: r.platform, comments: [] });
+      }
+      grouped.get(key)!.comments.push(r);
+    }
+    setGroups([...grouped.entries()].map(([sourceId, v]) => ({ sourceId, ...v })));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadPending(); }, [loadPending]);
+
+  const handleLink = async (sourceId: string, sourceUrl: string) => {
+    if (!currentProject) return;
+    setLinking(sourceId);
+    try {
+      // Read posts from store at call time to avoid stale closure
+      const currentPosts = useAppStore.getState().posts;
+      let postId = currentPosts.find(p => p.url === sourceUrl)?.id;
+      if (!postId && sourceUrl) {
+        const platform = sourceUrl.includes('bilibili') ? 'bilibili' as const : 'xhs' as const;
+        const newPost = await createPost({
+          project_id: currentProject.id,
+          platform,
+          url: sourceUrl,
+          title: `${platform === 'bilibili' ? 'B站' : '小红书'}内容`,
+          collected_by: 'bookmarklet',
+        });
+        if (newPost) {
+          postId = newPost.id;
+          setPosts([...currentPosts, newPost]);
+        }
+      }
+      if (postId) {
+        const count = await linkRawComments(sourceId, postId, currentProject.id);
+        if (count > 0) {
+          const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
+          setPosts(p);
+          setComments(c);
+        }
+      }
+      loadPending();
+    } finally {
+      setLinking(null);
+    }
+  };
+
+  const handleIgnore = async (sourceId: string) => {
+    await ignoreRawComments(sourceId);
+    loadPending();
+  };
+
+  if (loading || groups.length === 0) return null;
+
+  const platformLabel = (p: string) => p === 'bilibili' ? 'B站' : '小红书';
+  const platformColor = (p: string) => p === 'bilibili' ? 'bg-[#00A1D6]/10 text-[#00A1D6]' : 'bg-[#FE2C55]/10 text-[#FE2C55]';
+
+  return (
+    <div className="glass-card p-6 animate-fade-in">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">待导入的浏览器采集数据</h3>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)]">
+          {groups.reduce((s, g) => s + g.comments.length, 0)} 条待处理
+        </span>
+      </div>
+      <div className="space-y-2">
+        {groups.map(g => (
+          <div key={g.sourceId} className="flex items-center justify-between py-2.5 px-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)]">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px]', platformColor(g.platform))}>
+                  {platformLabel(g.platform)}
+                </span>
+                <span className="text-xs text-[var(--color-text-primary)] truncate">{g.sourceUrl || g.sourceId}</span>
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                {g.comments.length} 条评论
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+              <button
+                onClick={() => handleLink(g.sourceId, g.sourceUrl)}
+                disabled={linking === g.sourceId || !currentProject}
+                className="px-3 py-1.5 rounded-lg text-[10px] bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all disabled:opacity-40 active:scale-[0.98]"
+              >
+                {linking === g.sourceId ? '导入中...' : '导入'}
+              </button>
+              <button
+                onClick={() => handleIgnore(g.sourceId)}
+                className="px-3 py-1.5 rounded-lg text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-deep)] transition-colors"
+              >
+                忽略
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Task Queue Status ─────────────────────────────────────────
+function TaskQueueStatus() {
+  const [tasks, setTasks] = useState<{ id: string; platform: string; target_url: string; status: string; created_at: string; error_message?: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchTasks = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/tasks?status=pending,running,claimed');
+      const data = await res.json();
+      setTasks(data.tasks || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchTasks();
+    const interval = setInterval(fetchTasks, 10000);
+    return () => clearInterval(interval);
+  }, [fetchTasks]);
+
+  if (loading || tasks.length === 0) return null;
+
+  const statusLabel: Record<string, { text: string; color: string }> = {
+    pending: { text: '等待中', color: 'text-[var(--color-accent-amber)]' },
+    claimed: { text: '已领取', color: 'text-[var(--color-accent-blue)]' },
+    running: { text: '运行中', color: 'text-[var(--color-accent-green)]' },
+  };
+
+  return (
+    <div className="glass-card p-6 animate-fade-in">
+      <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">采集任务队列</h3>
+      <div className="space-y-2">
+        {tasks.map(t => {
+          const s = statusLabel[t.status] || { text: t.status, color: 'text-[var(--color-text-muted)]' };
+          return (
+            <div key={t.id} className="flex items-center justify-between py-2.5 px-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)]">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px]',
+                    t.platform === 'bilibili' ? 'bg-[#00A1D6]/10 text-[#00A1D6]' : 'bg-[#FE2C55]/10 text-[#FE2C55]'
+                  )}>
+                    {t.platform === 'bilibili' ? 'B站' : '小红书'}
+                  </span>
+                  <span className="text-xs text-[var(--color-text-primary)] truncate">{t.target_url}</span>
+                </div>
+                <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                  {new Date(t.created_at).toLocaleString('zh-CN')}
+                  {t.error_message && <span className="text-[var(--color-accent-red)] ml-2">{t.error_message}</span>}
+                </div>
+              </div>
+              <span className={cn('text-[10px] flex-shrink-0 ml-3', s.color)}>{s.text}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Advanced Section (CSV Import) ─────────────────────────────
 function AdvancedImport() {
   const [open, setOpen] = useState(false);
@@ -331,7 +504,6 @@ export default function CollectPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const { fetchProjects, fetchPosts, fetchComments } = await import('@/lib/supabase-service');
       const pj = await fetchProjects();
       if (pj.length > 0) {
         setProjects(pj);
@@ -391,6 +563,12 @@ export default function CollectPage() {
 
       {/* Recent Collections */}
       <RecentCollections />
+
+      {/* Pending Raw Comments (Bookmarklet) */}
+      <PendingRawComments />
+
+      {/* Task Queue Status (XHS async tasks) */}
+      <TaskQueueStatus />
 
       {/* Advanced Import */}
       <AdvancedImport />

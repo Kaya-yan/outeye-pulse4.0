@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     let comments: { id: string; text: string }[] = [];
 
     if (commentIds && Array.isArray(commentIds)) {
+      // commentIds 路径：允许指定任意评论（如手动选择），不强制 is_sampled
       const { data, error } = await supabase
         .from('comments')
         .select('id, text')
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id, text')
         .eq('post_id', postId)
+        .eq('is_sampled', true)
         .is('analysis', null)
         .order('likes', { ascending: false })
         .limit(500);
@@ -54,6 +56,7 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id, text')
         .eq('project_id', projectId)
+        .eq('is_sampled', true)
         .is('analysis', null)
         .order('likes', { ascending: false })
         .limit(1000);

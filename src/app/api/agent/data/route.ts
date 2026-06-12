@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { simpleHash, getSamplingTier } from '@/lib/hash';
+import { simpleHash, computeSampling } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -55,6 +55,16 @@ export async function POST(request: NextRequest) {
 
     // Auto-import: batch insert into comments
     const importResult = await importComments(raw_data, platform, project_id);
+
+    // Fire-and-forget: trigger AI analysis if we imported comments and have a project
+    if (importResult.imported > 0 && project_id) {
+      const origin = new URL(request.url).origin;
+      fetch(`${origin}/api/analysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project_id }),
+      }).catch(() => { /* non-fatal */ });
+    }
 
     // Update agent_data status
     await supabase
@@ -180,8 +190,7 @@ async function importComments(
       project_id: projectId || null,
       text: n.text,
       likes: n.likes,
-      sampling_tier: getSamplingTier(n.likes),
-      is_sampled: n.likes >= 100 || Math.random() < 0.5,
+      ...computeSampling(n.likes),
       content_hash: n.hash,
     });
   }

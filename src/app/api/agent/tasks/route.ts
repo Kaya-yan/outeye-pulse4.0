@@ -6,30 +6,50 @@ const supabase = createServerClient();
 const VALID_PLATFORMS = ['xhs', 'bilibili'] as const;
 
 /**
- * GET /api/agent/tasks?agent_id=xxx
- * Claim next pending task for a local agent (atomic via Postgres function).
+ * GET /api/agent/tasks?agent_id=xxx — Claim next pending task (for agent)
+ * GET /api/agent/tasks?status=pending,running — Query tasks by status (for UI)
  */
 export async function GET(request: NextRequest) {
   const agentId = request.nextUrl.searchParams.get('agent_id');
-  if (!agentId) {
-    return NextResponse.json({ error: 'agent_id required' }, { status: 400 });
+  const statusParam = request.nextUrl.searchParams.get('status');
+
+  // Mode 1: Agent claims next task
+  if (agentId) {
+    const { data, error } = await supabase.rpc('claim_next_task', { agent_id: agentId });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data || (Array.isArray(data) && data.length === 0)) {
+      return NextResponse.json({ task: null, message: 'no pending tasks' });
+    }
+
+    const task = Array.isArray(data) ? data[0] : data;
+    if (!task || !task.id) {
+      return NextResponse.json({ task: null, message: 'no pending tasks' });
+    }
+    return NextResponse.json({ task });
   }
 
-  const { data, error } = await supabase.rpc('claim_next_task', { agent_id: agentId });
+  // Mode 2: Query tasks by status (for UI)
+  if (statusParam) {
+    const statuses = statusParam.split(',').map(s => s.trim());
+    const { data, error } = await supabase
+      .from('task_queue')
+      .select('id, platform, target_url, status, created_at, started_at, completed_at, error_message, retry_count, max_retries')
+      .in('status', statuses)
+      .order('created_at', { ascending: false })
+      .limit(20);
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ tasks: data || [] });
   }
 
-  if (!data || (Array.isArray(data) && data.length === 0)) {
-    return NextResponse.json({ task: null, message: 'no pending tasks' });
-  }
-
-  const task = Array.isArray(data) ? data[0] : data;
-  if (!task || !task.id) {
-    return NextResponse.json({ task: null, message: 'no pending tasks' });
-  }
-  return NextResponse.json({ task });
+  return NextResponse.json({ error: 'agent_id or status required' }, { status: 400 });
 }
 
 /**

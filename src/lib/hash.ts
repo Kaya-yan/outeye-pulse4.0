@@ -11,8 +11,34 @@ export function simpleHash(input: string): string {
   return Math.abs(hash).toString(36);
 }
 
-export function getSamplingTier(likes: number): string {
-  return likes >= 100 ? 'high' : likes >= 10 ? 'mid' : 'low';
+export interface SamplingConfig {
+  high_likes_threshold: number;
+  mid_likes_threshold: number;
+  high_retention: number;
+  mid_retention: number;
+  low_retention: number;
+}
+
+const DEFAULT_SAMPLING: SamplingConfig = {
+  high_likes_threshold: 100,
+  mid_likes_threshold: 10,
+  high_retention: 1.0,
+  mid_retention: 0.5,
+  low_retention: 0.5,
+};
+
+export function getSamplingTier(likes: number, config: SamplingConfig = DEFAULT_SAMPLING): 'high' | 'mid' | 'low' {
+  if (likes >= config.high_likes_threshold) return 'high';
+  if (likes >= config.mid_likes_threshold) return 'mid';
+  return 'low';
+}
+
+export function computeSampling(likes: number, config: SamplingConfig = DEFAULT_SAMPLING): { sampling_tier: 'high' | 'mid' | 'low'; is_sampled: boolean } {
+  const tier = getSamplingTier(likes, config);
+  const retention = tier === 'high' ? config.high_retention
+    : tier === 'mid' ? config.mid_retention
+    : config.low_retention;
+  return { sampling_tier: tier, is_sampled: Math.random() < retention };
 }
 
 const CHUNK_SIZE = 500;

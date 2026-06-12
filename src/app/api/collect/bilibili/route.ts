@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { simpleHash, getSamplingTier, findExistingHashes } from '@/lib/hash';
+import { simpleHash, computeSampling, findExistingHashes } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -292,8 +292,7 @@ async function importComments(
       source_tool: 'quick-collect',
       source_url: c.sourceUrl,
       content_hash: hash,
-      sampling_tier: getSamplingTier(c.likes),
-      is_sampled: c.likes >= 100 || Math.random() < 0.5,
+      ...computeSampling(c.likes),
     });
   }
 
