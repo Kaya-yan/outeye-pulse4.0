@@ -98,7 +98,10 @@ function generateFindings(posts: any[], comments: any[], analyzed: any[], isPlai
 }
 
 // ─── Overview Tab ───────────────────────────────────────────────
-function OverviewTab({ posts, comments, analyzed, isPlain }: { posts: any[]; comments: any[]; analyzed: any[]; isPlain: boolean }) {
+function OverviewTab({ posts, comments, analyzed, isPlain, isAnalyzing, onStartAnalysis, analysisTriggering }: {
+  posts: any[]; comments: any[]; analyzed: any[]; isPlain: boolean;
+  isAnalyzing: boolean; onStartAnalysis: () => void; analysisTriggering: boolean;
+}) {
   const findings = useMemo(() => generateFindings(posts, comments, analyzed, isPlain), [posts, comments, analyzed, isPlain]);
 
   return (
@@ -143,8 +146,24 @@ function OverviewTab({ posts, comments, analyzed, isPlain }: { posts: any[]; com
       {/* Analysis pending */}
       {posts.length > 0 && analyzed.length === 0 && comments.length > 0 && (
         <div className="glass-card p-6 text-center animate-fade-in">
-          <p className="text-sm text-[var(--color-accent-amber)] mb-2">数据已采集，AI 分析正在自动进行</p>
-          <p className="text-xs text-[var(--color-text-muted)]">分析完成后即可查看可视化图表</p>
+          {isAnalyzing ? (
+            <>
+              <p className="text-sm text-[var(--color-accent-blue)] mb-2">AI 分析正在进行中...</p>
+              <p className="text-xs text-[var(--color-text-muted)]">分析完成后即可查看可视化图表</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-[var(--color-accent-amber)] mb-2">已采集 {comments.length} 条评论，尚未分析</p>
+              <p className="text-xs text-[var(--color-text-muted)] mb-4">点击下方按钮启动 AI 分析</p>
+              <button
+                onClick={onStartAnalysis}
+                disabled={analysisTriggering}
+                className="px-4 py-2 rounded-lg text-sm bg-[var(--color-accent-blue)] text-white hover:brightness-110 disabled:opacity-50 transition-all"
+              >
+                {analysisTriggering ? '启动中...' : '启动 AI 分析'}
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -728,10 +747,11 @@ function TimelineTab({ analyzed, posts, getDimLabel, isPlain }: { analyzed: any[
 
 // ─── Main Page ──────────────────────────────────────────────────
 export default function AnalyzePage() {
-  const { posts, comments, setPosts, setComments, setProjects, setCurrentProject, terminologyMode, setTerminologyMode } = useAppStore();
+  const { posts, comments, setPosts, setComments, setProjects, setCurrentProject, currentProject, terminologyMode, setTerminologyMode, activeAnalysisLogId, setActiveAnalysisLogId, setAnalysisProgress } = useAppStore();
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [analysisTriggering, setAnalysisTriggering] = useState(false);
   const isPlain = terminologyMode === 'plain';
   const getDimLabel = isPlain ? getDimensionPlainLabel : getDimensionLabel;
 
@@ -757,6 +777,29 @@ export default function AnalyzePage() {
   useEffect(() => {
     loadData().finally(() => setLoading(false));
   }, [loadData]);
+
+  const handleStartAnalysis = async () => {
+    if (!currentProject) return;
+    setAnalysisTriggering(true);
+    const { runAnalysis } = await import('@/lib/analysis-runner');
+    await runAnalysis(currentProject.id, undefined, {
+      onProgress: (processed, total, progress) => {
+        setAnalysisProgress({ processed, total, status: 'processing' });
+        setActiveAnalysisLogId('running');
+      },
+      onDone: (processed, failed, total) => {
+        setActiveAnalysisLogId(null);
+        setAnalysisProgress({ processed, total, status: 'completed' });
+        loadData(); // Refresh to show analyzed data
+      },
+      onError: (error) => {
+        setActiveAnalysisLogId(null);
+        setAnalysisProgress({ processed: 0, total: 0, status: 'failed' });
+        console.error('Analysis error:', error);
+      },
+    });
+    setAnalysisTriggering(false);
+  };
 
   if (loading) {
     return (
@@ -827,7 +870,7 @@ export default function AnalyzePage() {
 
       {/* Tab Content */}
       <div className="animate-fade-in">
-        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} />}
+        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={!!activeAnalysisLogId} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} />}
         {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} isPlain={isPlain} />}
         {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} isPlain={isPlain} />}
         {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}

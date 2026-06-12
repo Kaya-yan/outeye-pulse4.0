@@ -37,12 +37,13 @@ function ModeSwitch({ mode, onChange }: { mode: CollectMode; onChange: (m: Colle
 
 // ─── Keyword Search ────────────────────────────────────────────
 function KeywordSearch() {
-  const { currentProject, posts, setPosts, setComments } = useAppStore();
+  const { currentProject, posts, setPosts, setComments, setActiveAnalysisLogId, setAnalysisProgress } = useAppStore();
   const [keyword, setKeyword] = useState('');
   const [platform, setPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [timeRange, setTimeRange] = useState<'all' | '1y' | '6m' | '3m' | '1m'>('all');
+  const [dateFrom, setDateFrom] = useState(''); // YYYY-MM format
+  const [dateTo, setDateTo] = useState('');     // YYYY-MM format
   const [biliResults, setBiliResults] = useState<{
     bvid: string; aid: number; title: string; author: string; mid: number;
     play: number; danmaku: number; favorites: number; likes: number;
@@ -55,6 +56,7 @@ function KeywordSearch() {
     description: string; collected: boolean;
   }[]>([]);
   const [total, setTotal] = useState(0);
+  const [totalNote, setTotalNote] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTaskId, setSearchTaskId] = useState<string | null>(null);
   const [collecting, setCollecting] = useState<string | null>(null);
@@ -62,10 +64,13 @@ function KeywordSearch() {
   const [collectedIds, setCollectedIds] = useState<Set<string>>(new Set());
 
   const getTimeRangeParams = (): { pubtimeBegin?: number; pubtimeEnd?: number } => {
-    if (timeRange === 'all') return {};
-    const now = Math.floor(Date.now() / 1000);
-    const days = timeRange === '1y' ? 365 : timeRange === '6m' ? 180 : timeRange === '3m' ? 90 : 30;
-    return { pubtimeBegin: now - days * 86400, pubtimeEnd: now };
+    if (!dateFrom && !dateTo) return {};
+    const begin = dateFrom ? Math.floor(new Date(dateFrom + '-01').getTime() / 1000) : undefined;
+    // End of month: go to next month first day, then subtract 1 second
+    const end = dateTo
+      ? Math.floor(new Date(new Date(dateTo + '-01').getFullYear(), new Date(dateTo + '-01').getMonth() + 1, 0, 23, 59, 59).getTime() / 1000)
+      : undefined;
+    return { pubtimeBegin: begin, pubtimeEnd: end };
   };
 
   const handleSearch = async (page = 1) => {
@@ -88,6 +93,7 @@ function KeywordSearch() {
           setBiliResults(data.results || []);
           setXhsResults([]);
           setTotal(data.total || 0);
+          setTotalNote(data.total_note || null);
           if (page === 1 && currentProject) {
             const { pubtimeBegin, pubtimeEnd } = getTimeRangeParams();
             const task = await createSearchTask({
@@ -130,7 +136,7 @@ function KeywordSearch() {
         const res = await fetch('/api/collect/xhs-search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20, timeRange }),
+          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20, timeRange: 'custom', dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
         });
         const data = await res.json();
         if (data.error) {
@@ -165,6 +171,10 @@ function KeywordSearch() {
           const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
           setPosts(p);
           setComments(c);
+          // Trigger AI analysis after collection
+          if (data.imported > 0) {
+            triggerAnalysis(currentProject.id, data.post_id, setActiveAnalysisLogId, setAnalysisProgress);
+          }
           if (searchTaskId && data.post_id) {
             const searchResults = await fetchSearchResults(searchTaskId);
             const match = searchResults.find(r => r.platform_id === id);
@@ -215,6 +225,10 @@ function KeywordSearch() {
           const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
           setPosts(p);
           setComments(c);
+          // Trigger AI analysis after batch collection
+          if (data.total_imported > 0) {
+            triggerAnalysis(currentProject.id, undefined, setActiveAnalysisLogId, setAnalysisProgress);
+          }
         }
       } catch { /* ignore */ }
       setBatchCollecting(false);
@@ -303,26 +317,29 @@ function KeywordSearch() {
 
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-[var(--color-text-muted)]">时间范围：</span>
-          {([
-            { key: 'all' as const, label: '全部' },
-            { key: '1y' as const, label: '近一年' },
-            { key: '6m' as const, label: '近半年' },
-            { key: '3m' as const, label: '近三月' },
-            { key: '1m' as const, label: '近一月' },
-          ]).map(t => (
+          <input
+            type="month"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            placeholder="开始月份"
+            className="px-2 py-1 rounded text-[10px] bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] outline-none"
+          />
+          <span className="text-[10px] text-[var(--color-text-muted)]">至</span>
+          <input
+            type="month"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            placeholder="结束月份"
+            className="px-2 py-1 rounded text-[10px] bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] outline-none"
+          />
+          {(dateFrom || dateTo) && (
             <button
-              key={t.key}
-              onClick={() => { setTimeRange(t.key); if ((platform === 'bilibili' && biliResults.length > 0) || (platform === 'xhs' && xhsResults.length > 0)) handleSearch(); }}
-              className={cn(
-                'px-2.5 py-1 rounded text-[10px] transition-all duration-200',
-                timeRange === t.key
-                  ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
-              )}
+              onClick={() => { setDateFrom(''); setDateTo(''); }}
+              className="px-2 py-1 rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-accent-red)] transition-colors"
             >
-              {t.label}
+              清除
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -349,6 +366,12 @@ function KeywordSearch() {
               </div>
             ))}
           </div>
+
+          {totalNote && (
+            <div className="text-[10px] text-[var(--color-accent-amber)] text-center">
+              {totalNote}（已自动过滤不相关结果）
+            </div>
+          )}
 
           {/* Batch Collect */}
           <div className="flex items-center justify-between">
@@ -543,6 +566,33 @@ function KeywordSearch() {
   );
 }
 
+// ─── Shared: trigger AI analysis ───────────────────────────────
+async function triggerAnalysis(
+  projectId: string,
+  postId: string | undefined,
+  setActiveAnalysisLogId: (id: string | null) => void,
+  setAnalysisProgress: (p: { processed: number; total: number; status: string }) => void,
+): Promise<boolean> {
+  try {
+    const { runAnalysis } = await import('@/lib/analysis-runner');
+    runAnalysis(projectId, postId, {
+      onProgress: (processed, total) => {
+        setAnalysisProgress({ processed, total, status: 'processing' });
+        setActiveAnalysisLogId('running');
+      },
+      onDone: (processed, _failed, total) => {
+        setActiveAnalysisLogId(null);
+        setAnalysisProgress({ processed, total, status: 'completed' });
+      },
+      onError: () => {
+        setActiveAnalysisLogId(null);
+      },
+    });
+    return true;
+  } catch { /* non-fatal */ }
+  return false;
+}
+
 // ─── Hero URL Input ────────────────────────────────────────────
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [url, setUrl] = useState('');
@@ -583,8 +633,8 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           setError(mapBilibiliError(data.error));
         } else {
           let analysisTriggered = false;
-          if (data.imported > 0) {
-            analysisTriggered = await triggerAnalysis(data.post_id);
+          if (data.imported > 0 && currentProject) {
+            analysisTriggered = await triggerAnalysis(currentProject.id, data.post_id, setActiveAnalysisLogId, setAnalysisProgress);
           }
           setResult({
             imported: data.imported,
@@ -617,26 +667,6 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
     } finally {
       setCollecting(false);
     }
-  };
-
-  const triggerAnalysis = async (postId?: string): Promise<boolean> => {
-    if (!currentProject) return false;
-    try {
-      const body: Record<string, unknown> = { projectId: currentProject.id };
-      if (postId) body.postId = postId;
-      const res = await fetch('/api/analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (data.log_id) {
-        setActiveAnalysisLogId(data.log_id);
-        setAnalysisProgress({ processed: 0, total: data.total, status: 'processing' });
-        return true;
-      }
-    } catch { /* non-fatal */ }
-    return false;
   };
 
   const platform = detectPlatform(url);

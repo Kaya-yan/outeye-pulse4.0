@@ -155,6 +155,7 @@ export const useAppStore = create<AppState>()(
         presentationMode: state.presentationMode,
         sidebarCollapsed: state.sidebarCollapsed,
         terminologyMode: state.terminologyMode,
+        activeAnalysisLogId: state.activeAnalysisLogId,
       }),
       migrate: (persisted: unknown) => {
         // Clean up old introSeen from localStorage

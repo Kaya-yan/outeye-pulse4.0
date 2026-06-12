@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { sleep } from '@/lib/hash';
 
 const supabase = createServerClient();
 
@@ -18,25 +17,43 @@ const SYSTEM_PROMPT = `你是一位文化记忆研究领域的量化分析专家
 严格返回JSON数组，禁止任何解释文本。格式：
 [{"d1":8.5,"d2_valence":0.8,"d2_arousal":0.7,"d3":5,"d4":3,"d5":7.2,"d6":0,"narrative_type":"T2","labov_weights":[0.1,0.2,0.3,0.2,0.1,0.1],"risk_level":"safe","evidence_keywords":[{"word":"民族脊梁","weight":0.25,"dimension":"d3"}]}]`;
 
-const BATCH_SIZE = 20;
-const MAX_RETRIES = 2;
+const BATCH_SIZE = 10;
 
+/**
+ * POST /api/analysis
+ *
+ * Two modes:
+ * 1. Start mode: { projectId?, postId?, commentIds? } — creates log, returns logId + total
+ * 2. Batch mode: { logId, projectId } — processes one batch, returns progress
+ */
 export async function POST(request: NextRequest) {
   try {
-    const { projectId, commentIds, postId } = await request.json();
+    const body = await request.json();
+    const { projectId, commentIds, postId, logId } = body;
 
+    // ── Batch mode: process next batch for existing log ──
+    if (logId) {
+      return await processNextBatch(logId, projectId);
+    }
+
+    // ── Start mode: create analysis session ──
     if (!projectId && !commentIds) {
       return NextResponse.json({ error: 'projectId or commentIds required' }, { status: 400 });
     }
 
+    // Clean up orphaned processing state from previous interrupted runs
+    await supabase
+      .from('comments')
+      .update({ analysis_status: 'pending' })
+      .eq('analysis_status', 'processing');
+
     // Resolve comments to analyze
-    let comments: { id: string; text: string }[] = [];
+    let comments: { id: string }[] = [];
 
     if (commentIds && Array.isArray(commentIds)) {
-      // commentIds 路径：允许指定任意评论（如手动选择），不强制 is_sampled
       const { data, error } = await supabase
         .from('comments')
-        .select('id, text')
+        .select('id')
         .in('id', commentIds)
         .is('analysis', null);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -44,29 +61,25 @@ export async function POST(request: NextRequest) {
     } else if (postId) {
       const { data, error } = await supabase
         .from('comments')
-        .select('id, text')
+        .select('id')
         .eq('post_id', postId)
-        .eq('is_sampled', true)
         .is('analysis', null)
-        .order('likes', { ascending: false })
-        .limit(500);
+        .order('likes', { ascending: false });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       comments = data || [];
     } else {
       const { data, error } = await supabase
         .from('comments')
-        .select('id, text')
+        .select('id')
         .eq('project_id', projectId)
-        .eq('is_sampled', true)
         .is('analysis', null)
-        .order('likes', { ascending: false })
-        .limit(1000);
+        .order('likes', { ascending: false });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       comments = data || [];
     }
 
     if (comments.length === 0) {
-      return NextResponse.json({ success: true, message: '没有待分析的评论', processed: 0 });
+      return NextResponse.json({ success: true, message: '没有待分析的评论', total: 0, logId: null });
     }
 
     // Create analysis_log entry
@@ -88,103 +101,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to create analysis log: ${logError.message}` }, { status: 500 });
     }
 
-    const logId = logEntry.id;
-
-    // Mark all as processing
-    const commentIdsToProcess = comments.map(c => c.id);
-    await supabase
-      .from('comments')
-      .update({ analysis_status: 'processing' })
-      .in('id', commentIdsToProcess);
-
-    // Process in batches
-    const batches: typeof comments[] = [];
-    for (let i = 0; i < comments.length; i += BATCH_SIZE) {
-      batches.push(comments.slice(i, i + BATCH_SIZE));
-    }
-
-    let totalProcessed = 0;
-    let totalFailed = 0;
-    let totalTokens = 0;
-
-    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-      const batch = batches[batchIdx];
-      let success = false;
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        try {
-          const result = await analyzeBatch(batch);
-          totalProcessed += result.processed;
-          totalTokens += result.tokens;
-
-          // Mark successful comments
-          const processedIds = result.succeededIds;
-          if (processedIds.length > 0) {
-            await supabase
-              .from('comments')
-              .update({ analysis_status: 'completed' })
-              .in('id', processedIds);
-          }
-
-          // Mark unprocessed comments in this batch as failed (partial response)
-          const failedIds = batch.map(c => c.id).filter(id => !processedIds.includes(id));
-          if (failedIds.length > 0) {
-            totalFailed += failedIds.length;
-            await supabase
-              .from('comments')
-              .update({ analysis_status: 'failed' })
-              .in('id', failedIds);
-          }
-
-          success = true;
-          break;
-        } catch {
-          if (attempt === MAX_RETRIES) {
-            totalFailed += batch.length;
-            // Mark failed comments
-            await supabase
-              .from('comments')
-              .update({ analysis_status: 'failed' })
-              .in('id', batch.map(c => c.id));
-          }
-        }
-      }
-
-      // Update progress
-      const progress = Math.round(((totalProcessed + totalFailed) / comments.length) * 100);
-      await supabase
-        .from('analysis_logs')
-        .update({
-          processed_comments: totalProcessed,
-          failed_comments: totalFailed,
-          progress_percent: progress,
-          token_consumed: totalTokens,
-        })
-        .eq('id', logId);
-
-      // Small delay between batches to avoid rate limiting
-      if (batchIdx < batches.length - 1) {
-        await sleep(1000);
-      }
-    }
-
-    // Mark log as completed
-    await supabase
-      .from('analysis_logs')
-      .update({
-        status: totalFailed === comments.length ? 'failed' : 'completed',
-        completed_at: new Date().toISOString(),
-        error_message: totalFailed > 0 ? `${totalFailed}/${comments.length} 条分析失败` : null,
-      })
-      .eq('id', logId);
-
     return NextResponse.json({
       success: true,
-      processed: totalProcessed,
-      failed: totalFailed,
+      logId: logEntry.id,
       total: comments.length,
-      total_tokens: totalTokens,
-      log_id: logId,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -193,8 +113,161 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/analysis?logId=xxx — 查询分析进度
- * GET /api/analysis?projectId=xxx — 查询项目最近的分析日志
+ * Process one batch of comments for an existing analysis log.
+ */
+async function processNextBatch(logId: string, projectId?: string) {
+  // Get the log to know the project
+  const { data: log } = await supabase
+    .from('analysis_logs')
+    .select('*')
+    .eq('id', logId)
+    .single();
+
+  if (!log) {
+    return NextResponse.json({ error: 'Analysis log not found' }, { status: 404 });
+  }
+
+  if (log.status === 'completed' || log.status === 'failed') {
+    return NextResponse.json({
+      success: true,
+      done: true,
+      processed: log.processed_comments,
+      failed: log.failed_comments,
+      total: log.total_comments,
+      status: log.status,
+    });
+  }
+
+  const pid = projectId || log.project_id;
+
+  // Find next batch of unanalyzed comments (no is_sampled filter — analyze ALL)
+  const { data: comments, error: fetchError } = await supabase
+    .from('comments')
+    .select('id, text')
+    .eq('project_id', pid)
+    .is('analysis', null)
+    .order('likes', { ascending: false })
+    .limit(BATCH_SIZE);
+
+  if (fetchError) {
+    return NextResponse.json({ error: fetchError.message }, { status: 500 });
+  }
+
+  if (!comments || comments.length === 0) {
+    // No more comments to process — mark as completed
+    await supabase
+      .from('analysis_logs')
+      .update({
+        status: log.failed_comments > 0 ? 'completed' : 'completed',
+        completed_at: new Date().toISOString(),
+        error_message: log.failed_comments > 0 ? `${log.failed_comments} 条分析失败` : null,
+      })
+      .eq('id', logId);
+
+    return NextResponse.json({
+      success: true,
+      done: true,
+      processed: log.processed_comments,
+      failed: log.failed_comments,
+      total: log.total_comments,
+      status: 'completed',
+    });
+  }
+
+  // Mark as processing
+  await supabase
+    .from('comments')
+    .update({ analysis_status: 'processing' })
+    .in('id', comments.map(c => c.id));
+
+  // Call AI
+  let processed = 0;
+  let failed = 0;
+  let tokens = 0;
+
+  try {
+    const result = await analyzeBatch(comments);
+    processed = result.processed;
+    tokens = result.tokens;
+
+    // Mark successful
+    if (result.succeededIds.length > 0) {
+      await supabase
+        .from('comments')
+        .update({ analysis_status: 'completed' })
+        .in('id', result.succeededIds);
+    }
+
+    // Mark failed (partial response)
+    const failedIds = comments.map(c => c.id).filter(id => !result.succeededIds.includes(id));
+    if (failedIds.length > 0) {
+      failed = failedIds.length;
+      await supabase
+        .from('comments')
+        .update({ analysis_status: 'failed' })
+        .in('id', failedIds);
+    }
+  } catch {
+    failed = comments.length;
+    await supabase
+      .from('comments')
+      .update({ analysis_status: 'failed' })
+      .in('id', comments.map(c => c.id));
+  }
+
+  // Update log progress
+  const newProcessed = log.processed_comments + processed;
+  const newFailed = log.failed_comments + failed;
+  const totalDone = newProcessed + newFailed;
+  const progress = Math.round((totalDone / log.total_comments) * 100);
+
+  await supabase
+    .from('analysis_logs')
+    .update({
+      processed_comments: newProcessed,
+      failed_comments: newFailed,
+      progress_percent: progress,
+      token_consumed: (log.token_consumed || 0) + tokens,
+    })
+    .eq('id', logId);
+
+  // Check if there are more comments to process
+  const { count: remaining } = await supabase
+    .from('comments')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', pid)
+    .is('analysis', null);
+
+  const done = !remaining || remaining === 0;
+
+  if (done) {
+    await supabase
+      .from('analysis_logs')
+      .update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        error_message: newFailed > 0 ? `${newFailed} 条分析失败` : null,
+      })
+      .eq('id', logId);
+  }
+
+  return NextResponse.json({
+    success: true,
+    done,
+    batchProcessed: processed,
+    batchFailed: failed,
+    processed: newProcessed,
+    failed: newFailed,
+    total: log.total_comments,
+    progress,
+    remaining: done ? 0 : remaining,
+    tokens,
+  });
+}
+
+/**
+ * GET /api/analysis?logId=xxx — query analysis progress
+ * GET /api/analysis?projectId=xxx — query recent analysis logs
  */
 export async function GET(request: NextRequest) {
   const logId = request.nextUrl.searchParams.get('logId');
@@ -223,6 +296,8 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ error: 'logId or projectId required' }, { status: 400 });
 }
+
+// ─── AI helpers ────────────────────────────────────────────────
 
 async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ processed: number; tokens: number; succeededIds: string[] }> {
   const mimoApiKey = process.env.MIMO_API_KEY;

@@ -14,7 +14,7 @@ const supabase = createServerClient();
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { keyword, page = 1, pageSize = 20, timeRange } = body;
+    const { keyword, page = 1, pageSize = 20, timeRange, dateFrom, dateTo } = body;
 
     if (!keyword || typeof keyword !== 'string' || keyword.trim().length === 0) {
       return NextResponse.json({ error: '请输入搜索关键词' }, { status: 400 });
@@ -23,7 +23,13 @@ export async function POST(request: NextRequest) {
     // Compute time filter boundaries
     let timeBegin: string | null = null;
     let timeEnd: string | null = null;
-    if (timeRange && timeRange !== 'all') {
+    if (timeRange === 'custom' && (dateFrom || dateTo)) {
+      if (dateFrom) timeBegin = new Date(dateFrom + '-01').toISOString();
+      if (dateTo) {
+        const d = new Date(dateTo + '-01');
+        timeEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).toISOString();
+      }
+    } else if (timeRange && timeRange !== 'all' && timeRange !== 'custom') {
       const now = new Date();
       const days = timeRange === '1y' ? 365 : timeRange === '6m' ? 180 : timeRange === '3m' ? 90 : 30;
       timeBegin = new Date(now.getTime() - days * 86400000).toISOString();
