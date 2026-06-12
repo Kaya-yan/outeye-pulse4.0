@@ -42,10 +42,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Clean up orphaned processing state from previous interrupted runs
-    await supabase
-      .from('comments')
-      .update({ analysis_status: 'pending' })
-      .eq('analysis_status', 'processing');
+    try {
+      await supabase
+        .from('comments')
+        .update({ analysis_status: 'pending' })
+        .eq('analysis_status', 'processing');
+    } catch { /* analysis_status column may not exist yet */ }
 
     // Resolve comments to analyze
     let comments: { id: string }[] = [];
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id')
         .in('id', commentIds)
-        .is('analysis', null);
+        .eq('analysis_status', 'pending');
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       comments = data || [];
     } else if (postId) {
@@ -63,7 +65,7 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id')
         .eq('post_id', postId)
-        .is('analysis', null)
+        .eq('analysis_status', 'pending')
         .order('likes', { ascending: false });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       comments = data || [];
@@ -72,7 +74,7 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id')
         .eq('project_id', projectId)
-        .is('analysis', null)
+        .eq('analysis_status', 'pending')
         .order('likes', { ascending: false });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       comments = data || [];
@@ -140,12 +142,12 @@ async function processNextBatch(logId: string, projectId?: string) {
 
   const pid = projectId || log.project_id;
 
-  // Find next batch of unanalyzed comments (no is_sampled filter — analyze ALL)
+  // Find next batch of pending comments (skips failed/completed)
   const { data: comments, error: fetchError } = await supabase
     .from('comments')
     .select('id, text')
     .eq('project_id', pid)
-    .is('analysis', null)
+    .eq('analysis_status', 'pending')
     .order('likes', { ascending: false })
     .limit(BATCH_SIZE);
 
@@ -231,12 +233,12 @@ async function processNextBatch(logId: string, projectId?: string) {
     })
     .eq('id', logId);
 
-  // Check if there are more comments to process
+  // Check if there are more pending comments to process
   const { count: remaining } = await supabase
     .from('comments')
     .select('id', { count: 'exact', head: true })
     .eq('project_id', pid)
-    .is('analysis', null);
+    .eq('analysis_status', 'pending');
 
   const done = !remaining || remaining === 0;
 
@@ -307,8 +309,20 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     throw new Error('MIMO_API_KEY not configured');
   }
 
-  const userContent = batch
-    .map((c, i) => `【${i + 1}】${c.text}`)
+  // Deduplicate by text — AI returns one result per unique text
+  const uniqueTexts: string[] = [];
+  const textToIds = new Map<string, string[]>();
+  for (const c of batch) {
+    const key = c.text.trim();
+    if (!textToIds.has(key)) {
+      textToIds.set(key, []);
+      uniqueTexts.push(key);
+    }
+    textToIds.get(key)!.push(c.id);
+  }
+
+  const userContent = uniqueTexts
+    .map((text, i) => `【${i + 1}】${text}`)
     .join('\n');
 
   const response = await fetch(mimoApiUrl, {
@@ -320,7 +334,7 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     },
     body: JSON.stringify({
       model: 'mimo-v2.5-pro',
-      max_tokens: Math.max(4000, batch.length * 300),
+      max_tokens: Math.max(4000, uniqueTexts.length * 300),
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userContent }],
     }),
@@ -351,24 +365,33 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     throw new Error('Failed to parse AI JSON response');
   }
 
+  // Map results back: each unique text gets one analysis, applied to ALL comments with that text
   const succeededIds: string[] = [];
-  const updates = batch.slice(0, analysisArray.length).map((c, i) => {
+  const updates: PromiseLike<number>[] = [];
+
+  for (let i = 0; i < Math.min(uniqueTexts.length, analysisArray.length); i++) {
+    const text = uniqueTexts[i];
+    const ids = textToIds.get(text) || [];
     const validated = validateAnalysis(analysisArray[i]);
-    return supabase
-      .from('comments')
-      .update({
-        analysis: {
-          ...validated,
-          model_version: 'mimo-v2.5-pro',
-          analyzed_at: new Date().toISOString(),
-        },
-      })
-      .eq('id', c.id)
-      .then(({ error }) => {
-        if (!error) { succeededIds.push(c.id); return 1; }
-        return 0;
-      });
-  });
+    const analysisPayload = {
+      ...validated,
+      model_version: 'mimo-v2.5-pro',
+      analyzed_at: new Date().toISOString(),
+    };
+
+    for (const id of ids) {
+      updates.push(
+        supabase
+          .from('comments')
+          .update({ analysis: analysisPayload })
+          .eq('id', id)
+          .then(({ error }) => {
+            if (!error) { succeededIds.push(id); return 1; }
+            return 0;
+          })
+      );
+    }
+  }
   await Promise.all(updates);
 
   return {

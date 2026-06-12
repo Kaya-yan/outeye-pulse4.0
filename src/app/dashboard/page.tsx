@@ -98,6 +98,50 @@ export default function DashboardPage() {
     }
   }, [selectedNarrativeType, selectedRiskLevel, setSelectedNarrativeType, setSelectedRiskLevel, clearSelections]);
 
+  // CSV Export
+  const handleExportCSV = useCallback(() => {
+    const dataToExport = filteredComments.length > 0 ? filteredComments : comments;
+    if (dataToExport.length === 0) return;
+
+    const header = [
+      '评论原文', '点赞数', '发布时间', '所属作品标题', '作品链接', '平台',
+      'D1_认知深度', 'D2_情感效价', 'D2_情感唤醒', 'D3_文化认同', 'D4_行为意向', 'D5_叙事传输', 'D6_伦理风险',
+      '叙事类型', '风险等级', '分析状态',
+    ];
+
+    const rows = dataToExport.map(c => {
+      const post = posts.find(p => p.id === c.post_id);
+      const a = c.analysis;
+      return [
+        `"${(c.text || '').replace(/"/g, '""')}"`,
+        c.likes ?? 0,
+        c.created_at ? new Date(c.created_at).toLocaleDateString('zh-CN') : '',
+        `"${(post?.title || '').replace(/"/g, '""')}"`,
+        post?.url || '',
+        post?.platform || '',
+        a?.d1 ?? '',
+        a?.d2_valence ?? '',
+        a?.d2_arousal ?? '',
+        a?.d3 ?? '',
+        a?.d4 ?? '',
+        a?.d5 ?? '',
+        a?.d6 ?? '',
+        a?.narrative_type || '',
+        a?.risk_level || '',
+        c.analysis ? '已分析' : '未分析',
+      ].join(',');
+    });
+
+    const csv = '﻿' + header.join(',') + '\n' + rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `outeye_comments_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [filteredComments, comments, posts]);
+
   // KPI Stats
   const kpiStats = useMemo(() => {
     if (!stats) return [];
@@ -381,6 +425,15 @@ export default function DashboardPage() {
             宏观数据可视化 · 一屏掌握传播态势
           </p>
         </div>
+        <button
+          onClick={handleExportCSV}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/30 hover:bg-[#3B82F6]/20 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          导出 CSV
+        </button>
       </div>
 
       {/* Global Filter Bar */}
