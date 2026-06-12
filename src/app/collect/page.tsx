@@ -61,11 +61,11 @@ function KeywordSearch() {
   const [batchCollecting, setBatchCollecting] = useState(false);
   const [collectedIds, setCollectedIds] = useState<Set<string>>(new Set());
 
-  const getTimeRangeParams = (): { begin?: number; end?: number } => {
+  const getTimeRangeParams = (): { pubtimeBegin?: number; pubtimeEnd?: number } => {
     if (timeRange === 'all') return {};
     const now = Math.floor(Date.now() / 1000);
     const days = timeRange === '1y' ? 365 : timeRange === '6m' ? 180 : timeRange === '3m' ? 90 : 30;
-    return { begin: now - days * 86400, end: now };
+    return { pubtimeBegin: now - days * 86400, pubtimeEnd: now };
   };
 
   const handleSearch = async (page = 1) => {
@@ -89,13 +89,13 @@ function KeywordSearch() {
           setXhsResults([]);
           setTotal(data.total || 0);
           if (page === 1 && currentProject) {
-            const { begin, end } = getTimeRangeParams();
+            const { pubtimeBegin, pubtimeEnd } = getTimeRangeParams();
             const task = await createSearchTask({
               project_id: currentProject.id,
               platform: 'bilibili',
               keyword: keyword.trim(),
-              time_range_start: begin ? new Date(begin * 1000).toISOString() : null,
-              time_range_end: end ? new Date(end * 1000).toISOString() : null,
+              time_range_start: pubtimeBegin ? new Date(pubtimeBegin * 1000).toISOString() : null,
+              time_range_end: pubtimeEnd ? new Date(pubtimeEnd * 1000).toISOString() : null,
               status: 'completed',
               result_count: data.total,
               total_views: (data.results || []).reduce((s: number, r: { play: number }) => s + r.play, 0),

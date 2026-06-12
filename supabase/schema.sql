@@ -54,6 +54,11 @@ CREATE TABLE comments (
   sampling_tier TEXT NOT NULL CHECK (sampling_tier IN ('high', 'mid', 'low')),
   is_sampled BOOLEAN DEFAULT TRUE,
   analysis JSONB DEFAULT NULL,
+  analysis_status TEXT DEFAULT 'pending' CHECK (analysis_status IN ('pending', 'processing', 'completed', 'failed')),
+  rpid TEXT,
+  source_tool TEXT,
+  source_url TEXT,
+  content_hash TEXT,
   is_empty BOOLEAN DEFAULT FALSE,
   is_offensive BOOLEAN DEFAULT FALSE,
   is_ad BOOLEAN DEFAULT FALSE,
@@ -65,7 +70,7 @@ CREATE TABLE comments (
 -- Analysis logs table
 CREATE TABLE analysis_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES projects(id),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
   progress_percent INT DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
   total_comments INT DEFAULT 0,
@@ -81,7 +86,7 @@ CREATE TABLE analysis_logs (
 -- Reports table
 CREATE TABLE reports (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES projects(id),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
   report_type TEXT CHECK (report_type IN ('weekly', 'monthly', 'event', 'thesis_package')),
   title TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -92,11 +97,14 @@ CREATE TABLE reports (
 -- Indexes
 CREATE INDEX idx_posts_project_id ON posts(project_id);
 CREATE INDEX idx_posts_platform ON posts(platform);
+CREATE INDEX idx_posts_url ON posts(url);
 CREATE INDEX idx_comments_post_id ON comments(post_id);
 CREATE INDEX idx_comments_project_id ON comments(project_id);
 CREATE INDEX idx_comments_sampling ON comments(project_id, sampling_tier, is_sampled);
 CREATE INDEX idx_comments_analysis ON comments(project_id) WHERE analysis IS NULL;
+CREATE INDEX idx_comments_content_hash ON comments(content_hash);
 CREATE INDEX idx_analysis_logs_project ON analysis_logs(project_id);
+CREATE INDEX idx_search_tasks_project_status ON search_tasks(project_id, status);
 
 -- Row Level Security (RLS)
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
@@ -134,7 +142,21 @@ CREATE POLICY "anon_update_projects" ON projects FOR UPDATE TO anon USING (true)
 CREATE POLICY "anon_update_posts" ON posts FOR UPDATE TO anon USING (true) WITH CHECK (true);
 CREATE POLICY "anon_update_comments" ON comments FOR UPDATE TO anon USING (true) WITH CHECK (true);
 CREATE POLICY "anon_update_analysis_logs" ON analysis_logs FOR UPDATE TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "anon_update_reports" ON reports FOR UPDATE TO anon USING (true) WITH CHECK (true);
 CREATE POLICY "auth_update_projects" ON projects FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "auth_update_posts" ON posts FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "auth_update_comments" ON comments FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "auth_update_analysis_logs" ON analysis_logs FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "auth_update_reports" ON reports FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+-- DELETE policies (anon + authenticated)
+CREATE POLICY "anon_delete_projects" ON projects FOR DELETE TO anon USING (true);
+CREATE POLICY "anon_delete_posts" ON posts FOR DELETE TO anon USING (true);
+CREATE POLICY "anon_delete_comments" ON comments FOR DELETE TO anon USING (true);
+CREATE POLICY "anon_delete_analysis_logs" ON analysis_logs FOR DELETE TO anon USING (true);
+CREATE POLICY "anon_delete_reports" ON reports FOR DELETE TO anon USING (true);
+CREATE POLICY "auth_delete_projects" ON projects FOR DELETE TO authenticated USING (true);
+CREATE POLICY "auth_delete_posts" ON posts FOR DELETE TO authenticated USING (true);
+CREATE POLICY "auth_delete_comments" ON comments FOR DELETE TO authenticated USING (true);
+CREATE POLICY "auth_delete_analysis_logs" ON analysis_logs FOR DELETE TO authenticated USING (true);
+CREATE POLICY "auth_delete_reports" ON reports FOR DELETE TO authenticated USING (true);

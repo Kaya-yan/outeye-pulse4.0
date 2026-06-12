@@ -1,5 +1,4 @@
 export { KPICard } from './KPICard';
-export { FilterBar } from './FilterBar';
 export { IntroAnimation } from './IntroAnimation';
 export { ChartCard } from '../charts/ChartCard';
 export { SignificanceMarker } from './SignificanceMarker';

@@ -20,7 +20,16 @@ export default function DashboardPage() {
   }, [posts, comments]);
 
   const filteredComments = useMemo(() => {
+    const now = Date.now();
+    const rangeMs: Record<string, number> = { '7d': 7 * 86400000, '30d': 30 * 86400000, '90d': 90 * 86400000 };
+    const cutoff = rangeMs[filters.timeRange] ? now - rangeMs[filters.timeRange] : 0;
+
     return comments.filter(c => {
+      // Time range filter
+      if (cutoff > 0) {
+        const commentTime = new Date(c.created_at).getTime();
+        if (commentTime < cutoff) return false;
+      }
       if (filters.platform !== 'all') {
         const post = posts.find(p => p.id === c.post_id);
         if (post && post.platform !== filters.platform) return false;
@@ -97,12 +106,12 @@ export default function DashboardPage() {
     const aigcRatio = posts.length > 0 ? aigcPosts.length / posts.length : 0;
 
     return [
-      { label: '总笔记数', value: posts.length, change: 12, color: '#3B82F6' },
-      { label: '总评论数', value: filteredComments.length, change: 8, color: '#3B82F6' },
-      { label: '高危风险', value: highRisk, change: -2, color: '#EF4444' },
-      { label: 'AIGC 占比', value: aigcRatio, isPercent: true, change: 5, color: '#8B5CF6' },
-      { label: '采样评论', value: analyzedComments.length, change: 15, color: '#10B981' },
-      { label: '叙事类型数', value: stats.narrativeDistribution ? Object.keys(stats.narrativeDistribution).length : 0, change: 0, color: '#F59E0B' },
+      { label: '总笔记数', value: posts.length, color: '#3B82F6' },
+      { label: '总评论数', value: filteredComments.length, color: '#3B82F6' },
+      { label: '高危风险', value: highRisk, color: '#EF4444' },
+      { label: 'AIGC 占比', value: aigcRatio, isPercent: true, color: '#8B5CF6' },
+      { label: '采样评论', value: analyzedComments.length, color: '#10B981' },
+      { label: '叙事类型数', value: stats.narrativeDistribution ? Object.keys(stats.narrativeDistribution).length : 0, color: '#F59E0B' },
     ];
   }, [stats, posts, filteredComments, analyzedComments]);
 
@@ -380,6 +389,7 @@ export default function DashboardPage() {
           <select
             value={filters.platform}
             onChange={(e) => setFilters({ platform: e.target.value as typeof filters.platform })}
+            aria-label="平台筛选"
             className="px-3 py-1.5 rounded-lg bg-[#030712] text-[#94A3B8] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none"
           >
             <option value="all">平台: 全部</option>
@@ -390,6 +400,7 @@ export default function DashboardPage() {
           <select
             value={filters.timeRange}
             onChange={(e) => setFilters({ timeRange: e.target.value as typeof filters.timeRange })}
+            aria-label="时间范围"
             className="px-3 py-1.5 rounded-lg bg-[#030712] text-[#94A3B8] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none"
           >
             <option value="7d">近7天</option>
@@ -400,6 +411,7 @@ export default function DashboardPage() {
           <select
             value={filters.contentType}
             onChange={(e) => setFilters({ contentType: e.target.value as typeof filters.contentType })}
+            aria-label="内容类型"
             className="px-3 py-1.5 rounded-lg bg-[#030712] text-[#94A3B8] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none"
           >
             <option value="all">类型: 全部</option>
@@ -410,6 +422,7 @@ export default function DashboardPage() {
           <select
             value={filters.riskLevel}
             onChange={(e) => setFilters({ riskLevel: e.target.value as typeof filters.riskLevel })}
+            aria-label="风险等级"
             className="px-3 py-1.5 rounded-lg bg-[#030712] text-[#94A3B8] border border-[#1E293B] text-sm focus:border-[#3B82F6] outline-none"
           >
             <option value="all">风险: 全部</option>
@@ -423,7 +436,7 @@ export default function DashboardPage() {
             onClick={() => setFilters({ narrativeTypes: [] })}
             className="px-3 py-1.5 rounded-lg bg-[#3B82F6]/10 text-[#60A5FA] text-sm hover:bg-[#3B82F6]/20 transition-colors"
           >
-            应用筛选
+            清除叙事筛选
           </button>
           <button
             onClick={() => setFilters({ platform: 'all', timeRange: '30d', contentType: 'all', narrativeTypes: [], sentiment: 'all', riskLevel: 'all' })}
@@ -445,14 +458,6 @@ export default function DashboardPage() {
             >
               {kpi.isPercent ? formatPercent(kpi.value as number) : formatNumber(kpi.value as number)}
             </div>
-            {kpi.change !== 0 && (
-              <div className={cn(
-                'text-xs mt-1',
-                kpi.change > 0 ? 'text-[#10B981]' : 'text-[#EF4444]'
-              )}>
-                {kpi.change > 0 ? '↑' : '↓'} {Math.abs(kpi.change)}%
-              </div>
-            )}
           </div>
         ))}
       </div>

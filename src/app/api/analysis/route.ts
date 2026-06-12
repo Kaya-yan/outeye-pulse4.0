@@ -118,12 +118,22 @@ export async function POST(request: NextRequest) {
           totalTokens += result.tokens;
 
           // Mark successful comments
-          const processedIds = batch.slice(0, result.processed).map(c => c.id);
+          const processedIds = result.succeededIds;
           if (processedIds.length > 0) {
             await supabase
               .from('comments')
               .update({ analysis_status: 'completed' })
               .in('id', processedIds);
+          }
+
+          // Mark unprocessed comments in this batch as failed (partial response)
+          const failedIds = batch.map(c => c.id).filter(id => !processedIds.includes(id));
+          if (failedIds.length > 0) {
+            totalFailed += failedIds.length;
+            await supabase
+              .from('comments')
+              .update({ analysis_status: 'failed' })
+              .in('id', failedIds);
           }
 
           success = true;
@@ -214,7 +224,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ error: 'logId or projectId required' }, { status: 400 });
 }
 
-async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ processed: number; tokens: number }> {
+async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ processed: number; tokens: number; succeededIds: string[] }> {
   const mimoApiKey = process.env.MIMO_API_KEY;
   const mimoApiUrl = process.env.MIMO_API_URL || 'https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages';
 
@@ -235,7 +245,7 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     },
     body: JSON.stringify({
       model: 'mimo-v2.5-pro',
-      max_tokens: 4000,
+      max_tokens: Math.max(4000, batch.length * 300),
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userContent }],
     }),
@@ -266,24 +276,48 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     throw new Error('Failed to parse AI JSON response');
   }
 
-  const updates = batch.slice(0, analysisArray.length).map((c, i) =>
-    supabase
+  const succeededIds: string[] = [];
+  const updates = batch.slice(0, analysisArray.length).map((c, i) => {
+    const validated = validateAnalysis(analysisArray[i]);
+    return supabase
       .from('comments')
       .update({
         analysis: {
-          ...analysisArray[i],
+          ...validated,
           model_version: 'mimo-v2.5-pro',
           analyzed_at: new Date().toISOString(),
         },
       })
       .eq('id', c.id)
-      .then(({ error }) => (error ? 0 : 1)),
-  );
-  const results = await Promise.all(updates);
-  const processed = results.reduce<number>((s, r) => s + r, 0);
+      .then(({ error }) => {
+        if (!error) { succeededIds.push(c.id); return 1; }
+        return 0;
+      });
+  });
+  await Promise.all(updates);
 
   return {
-    processed,
+    processed: succeededIds.length,
     tokens: result.usage?.output_tokens || 0,
+    succeededIds,
+  };
+}
+
+function validateAnalysis(raw: Record<string, unknown>): Record<string, unknown> {
+  const clamp = (v: unknown, min: number, max: number, fallback: number) => {
+    const n = typeof v === 'number' ? v : fallback;
+    return Math.max(min, Math.min(max, n));
+  };
+
+  return {
+    ...raw,
+    d1: clamp(raw.d1, 1, 10, 5),
+    d2_valence: clamp(raw.d2_valence, -1, 1, 0),
+    d2_arousal: clamp(raw.d2_arousal, 0, 1, 0.5),
+    d3: clamp(raw.d3, 1, 6, 3),
+    d4: clamp(raw.d4, 1, 5, 3),
+    d5: clamp(raw.d5, 1, 10, 5),
+    d6: clamp(raw.d6, 0, 1, 0),
+    risk_level: ['safe', 'low', 'medium', 'high'].includes(raw.risk_level as string) ? raw.risk_level : 'safe',
   };
 }

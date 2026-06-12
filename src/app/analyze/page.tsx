@@ -30,7 +30,9 @@ function avgDim(arr: { analysis: any }[], dim: string): number {
 }
 
 function getDimValues(arr: { analysis: any }[], dim: string): number[] {
-  return arr.map(c => Number(c.analysis?.[dim]) || 0).filter(v => v !== 0);
+  return arr
+    .filter(c => c.analysis?.[dim] != null && !isNaN(Number(c.analysis[dim])))
+    .map(c => Number(c.analysis[dim]));
 }
 
 // ─── Findings Generator ────────────────────────────────────────
