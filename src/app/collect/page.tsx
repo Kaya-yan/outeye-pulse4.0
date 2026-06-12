@@ -5,8 +5,554 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/stores/useAppStore';
 import { cn } from '@/lib/utils';
-import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects } from '@/lib/supabase-service';
-import type { RawComment } from '@/lib/supabase-service';
+import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults, updateSearchTask } from '@/lib/supabase-service';
+import type { RawComment, SearchResult } from '@/lib/supabase-service';
+
+// ─── Mode Tabs ─────────────────────────────────────────────────
+type CollectMode = 'url' | 'search';
+
+function ModeSwitch({ mode, onChange }: { mode: CollectMode; onChange: (m: CollectMode) => void }) {
+  return (
+    <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] w-fit mx-auto">
+      {([
+        { key: 'url' as const, label: '精准采集', desc: '粘贴链接' },
+        { key: 'search' as const, label: '关键词检索', desc: '搜索发现' },
+      ]).map(tab => (
+        <button
+          key={tab.key}
+          onClick={() => onChange(tab.key)}
+          className={cn(
+            'px-5 py-2 rounded-md text-sm transition-all duration-200',
+            mode === tab.key
+              ? 'bg-[var(--color-accent-blue)] text-white shadow-sm'
+              : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+          )}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Keyword Search ────────────────────────────────────────────
+function KeywordSearch() {
+  const { currentProject, posts, setPosts, setComments } = useAppStore();
+  const [keyword, setKeyword] = useState('');
+  const [platform, setPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [timeRange, setTimeRange] = useState<'all' | '1y' | '6m' | '3m' | '1m'>('all');
+  const [biliResults, setBiliResults] = useState<{
+    bvid: string; aid: number; title: string; author: string; mid: number;
+    play: number; danmaku: number; favorites: number; likes: number;
+    review: number; pubdate: number; duration: string; description: string;
+    pic: string; tag: string;
+  }[]>([]);
+  const [xhsResults, setXhsResults] = useState<{
+    id: string; note_id: string; title: string; author: string; url: string;
+    views: number; likes: number; comments_count: number; cover_url: string;
+    description: string; collected: boolean;
+  }[]>([]);
+  const [total, setTotal] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchTaskId, setSearchTaskId] = useState<string | null>(null);
+  const [collecting, setCollecting] = useState<string | null>(null);
+  const [batchCollecting, setBatchCollecting] = useState(false);
+  const [collectedIds, setCollectedIds] = useState<Set<string>>(new Set());
+
+  const getTimeRangeParams = (): { begin?: number; end?: number } => {
+    if (timeRange === 'all') return {};
+    const now = Math.floor(Date.now() / 1000);
+    const days = timeRange === '1y' ? 365 : timeRange === '6m' ? 180 : timeRange === '3m' ? 90 : 30;
+    return { begin: now - days * 86400, end: now };
+  };
+
+  const handleSearch = async (page = 1) => {
+    if (!keyword.trim()) return;
+    setSearching(true);
+    setError(null);
+    setCurrentPage(page);
+
+    try {
+      if (platform === 'bilibili') {
+        const res = await fetch('/api/collect/bilibili-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20, ...getTimeRangeParams() }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          setError(data.error);
+        } else {
+          setBiliResults(data.results || []);
+          setXhsResults([]);
+          setTotal(data.total || 0);
+          if (page === 1 && currentProject) {
+            const { begin, end } = getTimeRangeParams();
+            const task = await createSearchTask({
+              project_id: currentProject.id,
+              platform: 'bilibili',
+              keyword: keyword.trim(),
+              time_range_start: begin ? new Date(begin * 1000).toISOString() : null,
+              time_range_end: end ? new Date(end * 1000).toISOString() : null,
+              status: 'completed',
+              result_count: data.total,
+              total_views: (data.results || []).reduce((s: number, r: { play: number }) => s + r.play, 0),
+              total_likes: (data.results || []).reduce((s: number, r: { likes: number }) => s + r.likes, 0),
+              total_comments: (data.results || []).reduce((s: number, r: { review: number }) => s + r.review, 0),
+            });
+            if (task) {
+              setSearchTaskId(task.id);
+              await insertSearchResults((data.results || []).map((r: typeof biliResults[0]) => ({
+                search_task_id: task.id,
+                platform: 'bilibili',
+                platform_id: r.bvid,
+                url: `https://www.bilibili.com/video/${r.bvid}`,
+                title: r.title,
+                author: r.author,
+                views: r.play,
+                likes: r.likes,
+                danmaku: r.danmaku,
+                comments_count: r.review,
+                favorites: r.favorites,
+                duration: r.duration,
+                description: r.description,
+                cover_url: r.pic ? `https:${r.pic}` : null,
+                tags: r.tag,
+                published_at: new Date(r.pubdate * 1000).toISOString(),
+              })));
+            }
+          }
+        }
+      } else {
+        // XHS search
+        const res = await fetch('/api/collect/xhs-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: keyword.trim(), page, pageSize: 20 }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          setError(data.error);
+        } else if (data.needVps) {
+          setError(data.error || '小红书搜索需要配置 VPS 采集器');
+        } else {
+          setXhsResults(data.results || []);
+          setBiliResults([]);
+          setTotal(data.total || 0);
+        }
+      }
+    } catch {
+      setError('搜索失败，请检查网络');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleCollectVideo = async (id: string) => {
+    setCollecting(id);
+    try {
+      if (platform === 'bilibili') {
+        const res = await fetch('/api/collect/bilibili', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bvid: id, max_comments: 5000 }),
+        });
+        const data = await res.json();
+        if (data.success && currentProject) {
+          setCollectedIds(prev => new Set(prev).add(id));
+          const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
+          setPosts(p);
+          setComments(c);
+          if (searchTaskId && data.post_id) {
+            const searchResults = await fetchSearchResults(searchTaskId);
+            const match = searchResults.find(r => r.platform_id === id);
+            if (match) {
+              const { markSearchResultCollected } = await import('@/lib/supabase-service');
+              await markSearchResultCollected(match.id, data.post_id);
+            }
+          }
+        }
+      } else {
+        // XHS: create a task for the note URL
+        const note = xhsResults.find(r => r.note_id === id);
+        if (!note) return;
+        const res = await fetch('/api/agent/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ platform: 'xhs', target_url: note.url, max_comments: 5000 }),
+        });
+        const data = await res.json();
+        if (!data.error) {
+          setCollectedIds(prev => new Set(prev).add(id));
+        }
+      }
+    } catch { /* ignore */ }
+    setCollecting(null);
+  };
+
+  const handleBatchCollect = async () => {
+    if (platform === 'bilibili') {
+      const uncollected = biliResults.filter(r => !collectedIds.has(r.bvid));
+      if (uncollected.length === 0) return;
+      setBatchCollecting(true);
+      try {
+        const res = await fetch('/api/collect/bilibili-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bvids: uncollected.map(r => r.bvid), project_id: currentProject?.id }),
+        });
+        const data = await res.json();
+        if (data.results) {
+          const newCollected = new Set(collectedIds);
+          for (const r of data.results) {
+            if (r.imported > 0) newCollected.add(r.bvid);
+          }
+          setCollectedIds(newCollected);
+        }
+        if (currentProject) {
+          const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
+          setPosts(p);
+          setComments(c);
+        }
+      } catch { /* ignore */ }
+      setBatchCollecting(false);
+    } else {
+      // XHS batch: create tasks for each uncollected note
+      const uncollected = xhsResults.filter(r => !collectedIds.has(r.note_id));
+      if (uncollected.length === 0) return;
+      setBatchCollecting(true);
+      const newCollected = new Set(collectedIds);
+      for (const note of uncollected) {
+        try {
+          const res = await fetch('/api/agent/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ platform: 'xhs', target_url: note.url, max_comments: 5000 }),
+          });
+          const data = await res.json();
+          if (!data.error) newCollected.add(note.note_id);
+        } catch { /* skip */ }
+      }
+      setCollectedIds(newCollected);
+      setBatchCollecting(false);
+    }
+  };
+
+  const totalPages = Math.ceil(total / 20);
+
+  const formatNum = (n: number) => {
+    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+    return n.toLocaleString();
+  };
+
+  return (
+    <div className="glass-card p-8 animate-fade-in">
+      <div className="text-center mb-6">
+        <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-2" style={{ fontFamily: 'var(--font-serif)' }}>
+          关键词检索
+        </h2>
+        <p className="text-sm text-[var(--color-text-secondary)]">
+          输入关键词搜索相关内容，查看数据概览并批量采集评论
+        </p>
+      </div>
+
+      {/* Search Input */}
+      <div className="max-w-3xl mx-auto space-y-3">
+        {/* Platform Selector */}
+        <div className="flex items-center gap-2 justify-center">
+          {([
+            { key: 'bilibili' as const, label: 'B站', color: '#00A1D6' },
+            { key: 'xhs' as const, label: '小红书', color: '#FE2C55' },
+          ]).map(p => (
+            <button
+              key={p.key}
+              onClick={() => { setPlatform(p.key); setBiliResults([]); setXhsResults([]); setTotal(0); setError(null); }}
+              className={cn(
+                'px-4 py-1.5 rounded-full text-xs font-medium transition-all duration-200 border',
+                platform === p.key
+                  ? 'border-transparent text-white shadow-sm'
+                  : 'border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+              )}
+              style={platform === p.key ? { backgroundColor: p.color } : undefined}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={keyword}
+              onChange={e => { setKeyword(e.target.value); setError(null); }}
+              onKeyDown={e => e.key === 'Enter' && !searching && keyword.trim() && handleSearch()}
+              placeholder={platform === 'bilibili' ? '输入关键词，如：郭永怀、两弹元勋、钱学森' : '输入关键词，如：护肤、旅行、美食'}
+              className="w-full bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] text-sm outline-none placeholder:text-[var(--color-text-muted)] font-mono px-4 py-3 rounded-lg border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] transition-colors duration-200"
+              disabled={searching}
+            />
+          </div>
+          <button
+            onClick={() => handleSearch()}
+            disabled={searching || !keyword.trim()}
+            className={cn(
+              'px-6 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex-shrink-0',
+              searching
+                ? 'bg-[var(--color-accent-blue)]/15 text-[var(--color-accent-blue-glow)]'
+                : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
+            )}
+          >
+            {searching ? '搜索中...' : '搜索'}
+          </button>
+        </div>
+
+        {/* Time Range Filter (Bilibili only) */}
+        {platform === 'bilibili' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-[var(--color-text-muted)]">时间范围：</span>
+            {([
+              { key: 'all' as const, label: '全部' },
+              { key: '1y' as const, label: '近一年' },
+              { key: '6m' as const, label: '近半年' },
+              { key: '3m' as const, label: '近三月' },
+              { key: '1m' as const, label: '近一月' },
+            ]).map(t => (
+              <button
+                key={t.key}
+                onClick={() => { setTimeRange(t.key); if (biliResults.length > 0) handleSearch(); }}
+                className={cn(
+                  'px-2.5 py-1 rounded text-[10px] transition-all duration-200',
+                  timeRange === t.key
+                    ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mt-4 max-w-3xl mx-auto p-3 rounded-lg bg-[var(--color-accent-red)]/10 border border-[var(--color-accent-red)]/20 animate-fade-in">
+          <p className="text-xs text-[var(--color-accent-red)]">{error}</p>
+        </div>
+      )}
+
+      {/* Results Overview — Bilibili */}
+      {platform === 'bilibili' && biliResults.length > 0 && (
+        <div className="mt-6 max-w-3xl mx-auto space-y-4 animate-fade-in-up">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: '相关视频', value: formatNum(total), color: 'var(--color-accent-blue)' },
+              { label: '本页播放', value: formatNum(biliResults.reduce((s, r) => s + r.play, 0)), color: 'var(--color-accent-green)' },
+              { label: '本页评论', value: formatNum(biliResults.reduce((s, r) => s + r.review, 0)), color: 'var(--color-accent-amber)' },
+              { label: '本页点赞', value: formatNum(biliResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
+            ].map(stat => (
+              <div key={stat.label} className="p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-center">
+                <div className="text-lg font-bold" style={{ color: stat.color }}>{stat.value}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)]">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Batch Collect */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[var(--color-text-muted)]">
+              共 {biliResults.filter(r => !collectedIds.has(r.bvid)).length} 个视频待采集
+            </span>
+            <button
+              onClick={handleBatchCollect}
+              disabled={batchCollecting || biliResults.every(r => collectedIds.has(r.bvid))}
+              className={cn(
+                'px-4 py-2 rounded-lg text-xs font-medium transition-all duration-200',
+                batchCollecting
+                  ? 'bg-[var(--color-accent-blue)]/15 text-[var(--color-accent-blue)]'
+                  : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
+              )}
+            >
+              {batchCollecting ? '批量采集中...' : '一键采集本页全部评论'}
+            </button>
+          </div>
+
+          {/* Video List */}
+          <div className="space-y-2">
+            {biliResults.map((r, i) => (
+              <div key={r.bvid} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors">
+                <div className="text-xs text-[var(--color-text-muted)] w-6 text-center flex-shrink-0">
+                  {(currentPage - 1) * 20 + i + 1}
+                </div>
+                {r.pic && (
+                  <img
+                    src={r.pic.startsWith('//') ? `https:${r.pic}` : r.pic}
+                    alt=""
+                    className="w-20 h-12 object-cover rounded flex-shrink-0 bg-[var(--color-bg-deep)]"
+                    loading="lazy"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
+                    <span>{r.author}</span>
+                    <span>{formatNum(r.play)}播放</span>
+                    <span>{formatNum(r.review)}评论</span>
+                    <span>{r.duration}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCollectVideo(r.bvid)}
+                  disabled={collecting === r.bvid || collectedIds.has(r.bvid)}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-[10px] flex-shrink-0 transition-all duration-200',
+                    collectedIds.has(r.bvid)
+                      ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
+                      : collecting === r.bvid
+                        ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)]'
+                        : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
+                  )}
+                >
+                  {collectedIds.has(r.bvid) ? '已采集' : collecting === r.bvid ? '采集中...' : '采集评论'}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                onClick={() => handleSearch(currentPage - 1)}
+                disabled={currentPage <= 1 || searching}
+                className="px-3 py-1.5 rounded text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-30 transition-colors"
+              >
+                上一页
+              </button>
+              <span className="text-xs text-[var(--color-text-muted)]">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                onClick={() => handleSearch(currentPage + 1)}
+                disabled={currentPage >= totalPages || searching}
+                className="px-3 py-1.5 rounded text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-30 transition-colors"
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Results Overview — XHS */}
+      {platform === 'xhs' && xhsResults.length > 0 && (
+        <div className="mt-6 max-w-3xl mx-auto space-y-4 animate-fade-in-up">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: '相关笔记', value: formatNum(total), color: 'var(--color-accent-blue)' },
+              { label: '本页浏览', value: formatNum(xhsResults.reduce((s, r) => s + r.views, 0)), color: 'var(--color-accent-green)' },
+              { label: '本页评论', value: formatNum(xhsResults.reduce((s, r) => s + r.comments_count, 0)), color: 'var(--color-accent-amber)' },
+              { label: '本页点赞', value: formatNum(xhsResults.reduce((s, r) => s + r.likes, 0)), color: 'var(--color-accent-red)' },
+            ].map(stat => (
+              <div key={stat.label} className="p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] text-center">
+                <div className="text-lg font-bold" style={{ color: stat.color }}>{stat.value}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)]">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Batch Collect */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[var(--color-text-muted)]">
+              共 {xhsResults.filter(r => !collectedIds.has(r.note_id)).length} 个笔记待采集
+            </span>
+            <button
+              onClick={handleBatchCollect}
+              disabled={batchCollecting || xhsResults.every(r => collectedIds.has(r.note_id))}
+              className={cn(
+                'px-4 py-2 rounded-lg text-xs font-medium transition-all duration-200',
+                batchCollecting
+                  ? 'bg-[#FE2C55]/15 text-[#FE2C55]'
+                  : 'bg-[#FE2C55] text-white hover:brightness-110 active:scale-[0.98]'
+              )}
+            >
+              {batchCollecting ? '创建任务中...' : '一键采集本页全部评论'}
+            </button>
+          </div>
+
+          {/* Note List */}
+          <div className="space-y-2">
+            {xhsResults.map((r, i) => (
+              <div key={r.note_id} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors">
+                <div className="text-xs text-[var(--color-text-muted)] w-6 text-center flex-shrink-0">
+                  {(currentPage - 1) * 20 + i + 1}
+                </div>
+                {r.cover_url && (
+                  <img
+                    src={r.cover_url}
+                    alt=""
+                    className="w-16 h-16 object-cover rounded flex-shrink-0 bg-[var(--color-bg-deep)]"
+                    loading="lazy"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title || '无标题'}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
+                    <span>{r.author}</span>
+                    <span>{formatNum(r.views)}浏览</span>
+                    <span>{formatNum(r.comments_count)}评论</span>
+                    <span>{formatNum(r.likes)}赞</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCollectVideo(r.note_id)}
+                  disabled={collecting === r.note_id || collectedIds.has(r.note_id)}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-[10px] flex-shrink-0 transition-all duration-200',
+                    collectedIds.has(r.note_id)
+                      ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
+                      : collecting === r.note_id
+                        ? 'bg-[#FE2C55]/10 text-[#FE2C55]'
+                        : 'bg-[#FE2C55] text-white hover:brightness-110 active:scale-[0.98]'
+                  )}
+                >
+                  {collectedIds.has(r.note_id) ? '任务已创建' : collecting === r.note_id ? '创建中...' : '采集评论'}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                onClick={() => handleSearch(currentPage - 1)}
+                disabled={currentPage <= 1 || searching}
+                className="px-3 py-1.5 rounded text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-30 transition-colors"
+              >
+                上一页
+              </button>
+              <span className="text-xs text-[var(--color-text-muted)]">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                onClick={() => handleSearch(currentPage + 1)}
+                disabled={currentPage >= totalPages || searching}
+                className="px-3 py-1.5 rounded text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-30 transition-colors"
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Hero URL Input ────────────────────────────────────────────
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
@@ -501,6 +1047,7 @@ export default function CollectPage() {
   const { setProjects, setCurrentProject, setPosts, setComments } = useAppStore();
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [mode, setMode] = useState<CollectMode>('url');
 
   const loadData = useCallback(async () => {
     try {
@@ -558,8 +1105,15 @@ export default function CollectPage() {
         </div>
       )}
 
-      {/* Hero: URL Input */}
-      <HeroUrlInput onCollected={loadData} />
+      {/* Mode Switcher */}
+      <ModeSwitch mode={mode} onChange={setMode} />
+
+      {/* Hero: URL Input or Keyword Search */}
+      {mode === 'url' ? (
+        <HeroUrlInput onCollected={loadData} />
+      ) : (
+        <KeywordSearch />
+      )}
 
       {/* Recent Collections */}
       <RecentCollections />

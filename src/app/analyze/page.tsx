@@ -16,6 +16,7 @@ const TABS = [
   { key: 'narrative', label: '叙事分析', desc: '类型分布·平台交叉' },
   { key: 'risk', label: '风险监测', desc: '伦理风险·高危评论' },
   { key: 'compare', label: '统计检验', desc: 'AIGC vs 人工·t检验' },
+  { key: 'timeline', label: '时序对比', desc: '时间段对比·趋势分析' },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
@@ -531,6 +532,198 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
+// ─── Timeline Tab ──────────────────────────────────────────────
+function TimelineTab({ analyzed, posts, getDimLabel, isPlain }: { analyzed: any[]; posts: any[]; getDimLabel: (d: string) => string; isPlain: boolean }) {
+  const [periodA, setPeriodA] = useState<'3m' | '6m' | '1y' | 'all'>('6m');
+  const [periodB, setPeriodB] = useState<'3m' | '6m' | '1y' | 'all'>('3m');
+
+  // Split analyzed comments into two time periods based on post collected_at
+  const postIdToTime = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of posts) {
+      map.set(p.id, new Date(p.collected_at || p.created_at).getTime());
+    }
+    return map;
+  }, [posts]);
+
+  const { groupA, groupB, labelA, labelB } = useMemo(() => {
+    if (analyzed.length === 0) return { groupA: [], groupB: [], labelA: '', labelB: '' };
+
+    const now = Date.now();
+    const getMs = (p: string) => p === '3m' ? 90 * 86400000 : p === '6m' ? 180 * 86400000 : p === '1y' ? 365 * 86400000 : now;
+    const cutoffA = now - getMs(periodA);
+    const cutoffB = now - getMs(periodB);
+
+    const withTime = analyzed.map(c => ({
+      ...c,
+      _time: postIdToTime.get(c.post_id) || 0,
+    }));
+
+    // Period A: older period (cutoffA to cutoffB)
+    // Period B: recent period (cutoffB to now)
+    const a = withTime.filter(c => c._time >= cutoffA && c._time < cutoffB);
+    const b = withTime.filter(c => c._time >= cutoffB);
+
+    const fmtDate = (ts: number) => new Date(ts).toLocaleDateString('zh-CN', { year: 'numeric', month: 'short' });
+
+    return {
+      groupA: a,
+      groupB: b,
+      labelA: `${fmtDate(cutoffA)} — ${fmtDate(cutoffB)}`,
+      labelB: `${fmtDate(cutoffB)} — ${fmtDate(now)}`,
+    };
+  }, [analyzed, postIdToTime, periodA, periodB]);
+
+  const tTestResults = useMemo(() => {
+    if (groupA.length < 2 || groupB.length < 2) return null;
+    return DIMENSIONS.map(dim => {
+      const s1 = groupA.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
+      const s2 = groupB.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
+      return { dim, ...welchTTest(s1, s2) };
+    });
+  }, [groupA, groupB]);
+
+  const radarOption = useMemo(() => {
+    if (groupA.length === 0 || groupB.length === 0) return null;
+    return {
+      tooltip: {},
+      legend: { data: [labelA, labelB], textStyle: { color: '#94A3B8', fontSize: 11 }, bottom: 0 },
+      radar: {
+        indicator: DIMENSIONS.map(d => ({ name: getDimLabel(d), max: d.startsWith('d2') ? 1 : d === 'd6' ? 10 : 10 })),
+        shape: 'polygon',
+        splitArea: { areaStyle: { color: ['rgba(91,141,239,0.02)', 'rgba(91,141,239,0.04)'] } },
+        axisLine: { lineStyle: { color: 'rgba(148,163,184,0.15)' } },
+        splitLine: { lineStyle: { color: 'rgba(148,163,184,0.1)' } },
+      },
+      series: [{
+        type: 'radar',
+        data: [
+          { value: DIMENSIONS.map(d => Number(avgDim(groupA, d).toFixed(2))), name: labelA, areaStyle: { color: 'rgba(245,158,11,0.15)' }, lineStyle: { color: '#F59E0B', width: 2 }, itemStyle: { color: '#F59E0B' } },
+          { value: DIMENSIONS.map(d => Number(avgDim(groupB, d).toFixed(2))), name: labelB, areaStyle: { color: 'rgba(16,185,129,0.15)' }, lineStyle: { color: '#10B981', width: 2 }, itemStyle: { color: '#10B981' } },
+        ],
+      }],
+    };
+  }, [groupA, groupB, labelA, labelB, getDimLabel]);
+
+  const barOption = useMemo(() => {
+    if (!tTestResults) return null;
+    return {
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: { type: 'category', data: tTestResults.map(r => getDimLabel(r.dim)), axisLabel: { fontSize: 10, color: '#94A3B8' } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 10, color: '#94A3B8' } },
+      series: [
+        { name: labelA, type: 'bar', data: tTestResults.map(r => Number(r.mean1.toFixed(3))), itemStyle: { color: '#F59E0B', borderRadius: [4, 4, 0, 0] } },
+        { name: labelB, type: 'bar', data: tTestResults.map(r => Number(r.mean2.toFixed(3))), itemStyle: { color: '#10B981', borderRadius: [4, 4, 0, 0] } },
+      ],
+    };
+  }, [tTestResults, labelA, labelB, getDimLabel]);
+
+  if (analyzed.length === 0) return <EmptyState text="暂无分析数据" />;
+
+  const PeriodSelect = ({ value, onChange, label }: { value: string; onChange: (v: any) => void; label: string }) => (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-[var(--color-text-muted)]">{label}</span>
+      {(['3m', '6m', '1y', 'all'] as const).map(p => (
+        <button
+          key={p}
+          onClick={() => onChange(p)}
+          className={cn(
+            'px-2 py-1 rounded text-[10px] transition-all',
+            value === p
+              ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20'
+              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+          )}
+        >
+          {p === '3m' ? '近3月' : p === '6m' ? '近半年' : p === '1y' ? '近1年' : '全部'}
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Period Selectors */}
+      <div className="glass-card p-5 animate-fade-in">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <PeriodSelect value={periodA} onChange={setPeriodA} label="时间段 A（较早）" />
+          <PeriodSelect value={periodB} onChange={setPeriodB} label="时间段 B（较近）" />
+        </div>
+        <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">
+          A: {labelA} ({groupA.length} 条) &nbsp;|&nbsp; B: {labelB} ({groupB.length} 条)
+        </div>
+      </div>
+
+      {groupA.length < 2 || groupB.length < 2 ? (
+        <EmptyState text={`需要两个时间段各有至少 2 条已分析评论。当前 A: ${groupA.length} 条, B: ${groupB.length} 条。请调整时间范围或先采集更多数据。`} />
+      ) : (
+        <>
+          {/* Radar + Bar */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {radarOption && (
+              <div className="chart-academic animate-fade-in">
+                <div className="chart-title">维度雷达对比</div>
+                <div className="chart-subtitle">A ({groupA.length}) vs B ({groupB.length}) 的六维对比</div>
+                <ReactECharts option={radarOption} style={{ height: 350 }} />
+              </div>
+            )}
+            {barOption && (
+              <div className="chart-academic animate-fade-in">
+                <div className="chart-title">维度均值柱状图</div>
+                <div className="chart-subtitle">各维度在两个时间段的均值差异</div>
+                <ReactECharts option={barOption} style={{ height: 350 }} />
+              </div>
+            )}
+          </div>
+
+          {/* T-Test Table */}
+          {tTestResults && (
+            <div className="glass-card p-5 animate-fade-in">
+              <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-3">Welch's t 检验结果</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border-subtle)]">
+                      <th className="text-left py-2 pr-3 text-[var(--color-text-muted)]">维度</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">A 均值</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">B 均值</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">变化</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">t 值</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">p 值</th>
+                      <th className="text-right py-2 px-2 text-[var(--color-text-muted)]">Cohen's d</th>
+                      <th className="text-right py-2 pl-2 text-[var(--color-text-muted)]">显著性</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tTestResults.map(r => {
+                      const change = r.mean2 - r.mean1;
+                      const changePct = r.mean1 !== 0 ? ((change / Math.abs(r.mean1)) * 100) : 0;
+                      return (
+                        <tr key={r.dim} className="border-b border-[var(--color-border-subtle)]/50">
+                          <td className="py-2 pr-3 text-[var(--color-text-primary)]">{getDimLabel(r.dim)}</td>
+                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)]">{r.mean1.toFixed(3)}</td>
+                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)]">{r.mean2.toFixed(3)}</td>
+                          <td className={cn('py-2 px-2 text-right font-medium', change > 0 ? 'text-[var(--color-accent-green)]' : change < 0 ? 'text-[var(--color-accent-red)]' : 'text-[var(--color-text-muted)]')}>
+                            {change > 0 ? '+' : ''}{changePct.toFixed(1)}%
+                          </td>
+                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.t.toFixed(3)}</td>
+                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.p < 0.001 ? '<0.001' : r.p.toFixed(3)}</td>
+                          <td className="py-2 px-2 text-right text-[var(--color-text-secondary)] font-mono">{r.cohensD.toFixed(3)}</td>
+                          <td className="py-2 pl-2 text-right font-bold">{r.significance}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ──────────────────────────────────────────────────
 export default function AnalyzePage() {
   const { posts, comments, setPosts, setComments, setProjects, setCurrentProject, terminologyMode, setTerminologyMode } = useAppStore();
@@ -637,6 +830,7 @@ export default function AnalyzePage() {
         {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} isPlain={isPlain} />}
         {activeTab === 'risk' && <RiskTab analyzed={analyzedComments} />}
         {activeTab === 'compare' && <CompareTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} />}
+        {activeTab === 'timeline' && <TimelineTab analyzed={analyzedComments} posts={posts} getDimLabel={getDimLabel} isPlain={isPlain} />}
       </div>
     </div>
   );

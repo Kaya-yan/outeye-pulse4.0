@@ -461,3 +461,104 @@ export async function insertRawComments(rows: RawComment[]): Promise<number> {
   }
   return rows.length;
 }
+
+// ==================== search_tasks & search_results ====================
+
+export interface SearchTask {
+  id: string;
+  project_id: string | null;
+  platform: string;
+  keyword: string;
+  time_range_start: string | null;
+  time_range_end: string | null;
+  status: string;
+  result_count: number;
+  total_comments: number;
+  total_views: number;
+  total_likes: number;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface SearchResult {
+  id: string;
+  search_task_id: string;
+  platform: string;
+  platform_id: string | null;
+  url: string | null;
+  title: string | null;
+  author: string | null;
+  views: number;
+  likes: number;
+  danmaku: number;
+  comments_count: number;
+  favorites: number;
+  duration: string | null;
+  description: string | null;
+  cover_url: string | null;
+  tags: string | null;
+  published_at: string | null;
+  collected: boolean;
+  post_id: string | null;
+}
+
+export async function createSearchTask(task: Partial<SearchTask>): Promise<SearchTask | null> {
+  const { data, error } = await supabase
+    .from('search_tasks')
+    .insert(task)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating search task:', error);
+    return null;
+  }
+  return data;
+}
+
+export async function updateSearchTask(id: string, updates: Partial<SearchTask>): Promise<boolean> {
+  const { error } = await supabase
+    .from('search_tasks')
+    .update(updates)
+    .eq('id', id);
+
+  return !error;
+}
+
+export async function fetchSearchTasks(projectId?: string): Promise<SearchTask[]> {
+  let query = supabase.from('search_tasks').select('*');
+  if (projectId) query = query.eq('project_id', projectId);
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(20);
+  if (error) { console.error('Error fetching search tasks:', error); return []; }
+  return data || [];
+}
+
+export async function insertSearchResults(results: Partial<SearchResult>[]): Promise<number> {
+  if (results.length === 0) return 0;
+  const { error } = await supabase.from('search_results').insert(results);
+  if (error) {
+    console.error('Error inserting search results:', error);
+    return 0;
+  }
+  return results.length;
+}
+
+export async function fetchSearchResults(searchTaskId: string): Promise<SearchResult[]> {
+  const { data, error } = await supabase
+    .from('search_results')
+    .select('*')
+    .eq('search_task_id', searchTaskId)
+    .order('views', { ascending: false });
+
+  if (error) { console.error('Error fetching search results:', error); return []; }
+  return data || [];
+}
+
+export async function markSearchResultCollected(resultId: string, postId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('search_results')
+    .update({ collected: true, post_id: postId })
+    .eq('id', resultId);
+  return !error;
+}

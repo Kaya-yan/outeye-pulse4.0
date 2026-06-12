@@ -1,0 +1,18 @@
+{
+  "name": "outeye-vps-collector",
+  "version": "1.0.0",
+  "description": "VPS-based XHS/Bilibili collector for OutEye Pulse",
+  "type": "module",
+  "scripts": {
+    "collect:xhs": "node xhs-collector.js",
+    "collect:bilibili": "node bilibili-collector.js",
+    "login:xhs": "node cookie-manager.js login",
+    "check:xhs": "node cookie-manager.js check",
+    "test": "node test-connection.js"
+  },
+  "dependencies": {
+    "playwright": "^1.45.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.0"
+  }
+}
