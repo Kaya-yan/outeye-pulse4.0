@@ -47,7 +47,7 @@ export async function collectBilibiliComments(
   },
   onProgress: (p: CollectProgress) => void,
 ): Promise<CollectResult> {
-  const maxComments = params.maxComments || 2000;
+  const maxComments = params.maxComments || 50000;
 
   // ── Phase 1: Init (create post, get aid) ──
   onProgress({ phase: 'init', message: '获取视频信息...', collected: 0 });
@@ -122,33 +122,65 @@ export async function collectBilibiliComments(
 
   // Phase 2b: Time-ordered comments (mode=2, paginate)
   let cursor = '0';
-  const maxPages = Math.ceil(maxComments / 20);
+  const estimatedTotal = video_stats?.replies || maxComments;
+  const maxPages = Math.min(Math.ceil(maxComments / 20), Math.ceil(estimatedTotal / 20) + 10);
+  let consecutiveEmpty = 0;
 
   for (let page = 0; page < maxPages && allReplies.length < maxComments; page++) {
-    try {
-      const res = await fetch(`/api/bilibili/replies?aid=${aid}&cursor=${cursor}&mode=2`);
-      const data = await res.json();
+    let retries = 0;
+    let success = false;
 
-      if (data.code !== 0 || !data.data?.replies || data.data.replies.length === 0) break;
+    while (retries < 3 && !success) {
+      try {
+        const res = await fetch(`/api/bilibili/replies?aid=${aid}&cursor=${cursor}&mode=2`);
+        const data = await res.json();
 
-      addReplies(data.data.replies);
+        if (data.code !== 0) {
+          retries++;
+          if (retries < 3) await sleep(1000 * retries);
+          continue;
+        }
 
-      onProgress({
-        phase: 'fetching',
-        message: `已采集 ${allReplies.length} 条评论...`,
-        collected: allReplies.length,
-        estimated: video_stats?.replies,
-      });
+        const pageReplies = data.data?.replies || [];
 
-      if (!data.data.hasMore) break;
-      cursor = data.data.nextCursor;
+        if (pageReplies.length === 0) {
+          consecutiveEmpty++;
+          // Bilibili API occasionally returns empty pages — don't give up immediately
+          if (consecutiveEmpty >= 3) {
+            console.log(`[Collect] ${consecutiveEmpty} consecutive empty pages, stopping.`);
+            break;
+          }
+          success = true; // count as success but don't add anything
+        } else {
+          consecutiveEmpty = 0;
+          addReplies(pageReplies);
+        }
 
-      // Random delay to avoid rate limiting
-      await sleep(800 + Math.random() * 1200);
-    } catch {
-      // One page failed — continue with what we have
-      break;
+        onProgress({
+          phase: 'fetching',
+          message: `已采集 ${allReplies.length} 条评论（第 ${page + 1} 页）...`,
+          collected: allReplies.length,
+          estimated: estimatedTotal,
+        });
+
+        if (!data.data.hasMore) {
+          console.log('[Collect] API reports no more pages.');
+          consecutiveEmpty = 999; // force exit
+          break;
+        }
+        cursor = data.data.nextCursor;
+        success = true;
+      } catch (err) {
+        retries++;
+        console.warn(`[Collect] Page ${page + 1} attempt ${retries} failed:`, err);
+        if (retries < 3) await sleep(1000 * retries);
+      }
     }
+
+    if (consecutiveEmpty >= 3) break;
+
+    // Random delay to avoid rate limiting
+    await sleep(800 + Math.random() * 1200);
   }
 
   // ── Phase 3: Sub-replies for top comments ──

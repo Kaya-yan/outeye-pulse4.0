@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
 
     const paginationStr = encodeURIComponent(JSON.stringify({ next_offset: cursor }));
     const replyUrl = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${aid}&mode=${mode}&pagination_str=${paginationStr}`;
+    console.log('[Bilibili Replies]', { aid, cursor, mode, url: replyUrl.slice(0, 150) });
 
     const replyResponse = await fetch(replyUrl, { headers: COMMON_HEADERS, signal: AbortSignal.timeout(10000) });
 
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
     const replyData = await replyResponse.json();
 
     if (replyData.code !== 0) {
+      console.error('[Bilibili Replies] API error:', replyData.code, replyData.message);
       return NextResponse.json(replyData);
     }
 
@@ -77,6 +79,16 @@ export async function GET(request: NextRequest) {
     const cursorInfo = replyData.data?.cursor;
     const hasMore = cursorInfo?.is_end === false;
     const nextCursor = hasMore ? String(cursorInfo.next) : null;
+
+    console.log('[Bilibili Replies] Result:', {
+      mode,
+      repliesCount: replies.length,
+      total: cursorInfo?.all_count,
+      isEnd: cursorInfo?.is_end,
+      hasMore,
+      nextCursor,
+      cursorNext: cursorInfo?.next,
+    });
 
     return NextResponse.json({
       code: 0,

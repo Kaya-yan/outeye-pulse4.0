@@ -162,7 +162,7 @@ function KeywordSearch() {
     try {
       if (platform === 'bilibili') {
         const collectResult = await collectBilibiliComments(
-          { bvid: id, projectId: currentProject?.id, maxComments: 2000 },
+          { bvid: id, projectId: currentProject?.id, maxComments: 50000 },
           () => {}, // progress callback (silent for search results)
         );
         if (collectResult.success && currentProject) {
@@ -209,7 +209,7 @@ function KeywordSearch() {
       try {
         for (const r of uncollected) {
           const collectResult = await collectBilibiliComments(
-            { bvid: r.bvid, projectId: currentProject?.id, maxComments: 2000 },
+            { bvid: r.bvid, projectId: currentProject?.id, maxComments: 50000 },
             () => {},
           );
           if (collectResult.success && collectResult.imported > 0) {
@@ -618,7 +618,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
     try {
       if (platform === 'bilibili') {
         const collectResult = await collectBilibiliComments(
-          { url: url.trim(), projectId: currentProject?.id, maxComments: 2000 },
+          { url: url.trim(), projectId: currentProject?.id, maxComments: 50000 },
           setProgress,
         );
 
@@ -978,6 +978,8 @@ function PendingRawComments() {
 }
 
 // ─── Task Queue Status ─────────────────────────────────────────
+const STALE_TASK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+
 function TaskQueueStatus() {
   const [tasks, setTasks] = useState<{ id: string; platform: string; target_url: string; status: string; created_at: string; error_message?: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -986,7 +988,29 @@ function TaskQueueStatus() {
     try {
       const res = await fetch('/api/agent/tasks?status=pending,running,claimed');
       const data = await res.json();
-      setTasks(data.tasks || []);
+      const allTasks = data.tasks || [];
+      const now = Date.now();
+
+      // Filter out stale tasks (pending/running for > 30 minutes)
+      const freshTasks = allTasks.filter((t: { created_at: string; status: string }) => {
+        const age = now - new Date(t.created_at).getTime();
+        return age < STALE_TASK_THRESHOLD_MS;
+      });
+
+      // Auto-fail stale tasks in the background
+      const staleTasks = allTasks.filter((t: { created_at: string }) => {
+        const age = now - new Date(t.created_at).getTime();
+        return age >= STALE_TASK_THRESHOLD_MS;
+      });
+      for (const t of staleTasks) {
+        fetch(`/api/agent/tasks?id=${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'failed', error_message: '任务超时，已自动标记为失败' }),
+        }).catch(() => {});
+      }
+
+      setTasks(freshTasks);
     } catch { /* ignore */ }
     setLoading(false);
   }, []);

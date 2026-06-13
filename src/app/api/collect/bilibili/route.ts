@@ -52,6 +52,17 @@ export async function POST(request: NextRequest) {
 
     if (existingPost) {
       postId = existingPost.id;
+      // Update metadata from fresh video info (in case it was missing or stale)
+      await supabase
+        .from('posts')
+        .update({
+          title: videoInfo.title,
+          creator_name: videoInfo.owner?.name || '',
+          author_name_mask: videoInfo.owner?.name || '',
+          likes: videoInfo.stat?.like || 0,
+          view_count: videoInfo.stat?.view || 0,
+        })
+        .eq('id', postId);
     } else {
       const { data: newPost, error: postErr } = await supabase
         .from('posts')

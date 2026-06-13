@@ -22,8 +22,8 @@ export function simpleHash(input: string): string {
 const DEFAULT_SAMPLING: SamplingConfig = {
   high_likes_threshold: 100,
   high_likes_retention: 1.0,
-  mid_likes_retention: 0.5,
-  low_likes_retention: 0.5,
+  mid_likes_retention: 1.0,
+  low_likes_retention: 1.0,
   batch_size: 10,
 };
 
