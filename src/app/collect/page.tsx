@@ -7,6 +7,7 @@ import { useAppStore } from '@/stores/useAppStore';
 import { cn, formatNumber } from '@/lib/utils';
 import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults } from '@/lib/supabase-service';
 import type { RawComment, SearchResult } from '@/lib/supabase-service';
+import { collectBilibiliComments, type CollectProgress } from '@/lib/collect-bilibili';
 
 // ─── Mode Tabs ─────────────────────────────────────────────────
 type CollectMode = 'url' | 'search';
@@ -160,27 +161,24 @@ function KeywordSearch() {
     setCollecting(id);
     try {
       if (platform === 'bilibili') {
-        const res = await fetch('/api/collect/bilibili', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bvid: id, max_comments: 5000 }),
-        });
-        const data = await res.json();
-        if (data.success && currentProject) {
+        const collectResult = await collectBilibiliComments(
+          { bvid: id, projectId: currentProject?.id, maxComments: 2000 },
+          () => {}, // progress callback (silent for search results)
+        );
+        if (collectResult.success && currentProject) {
           setCollectedIds(prev => new Set(prev).add(id));
           const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
           setPosts(p);
           setComments(c);
-          // Trigger AI analysis after collection
-          if (data.imported > 0) {
-            triggerAnalysis(currentProject.id, data.post_id, setAnalysisProgress);
+          if (collectResult.imported > 0) {
+            triggerAnalysis(currentProject.id, collectResult.postId, setAnalysisProgress);
           }
-          if (searchTaskId && data.post_id) {
+          if (searchTaskId && collectResult.postId) {
             const searchResults = await fetchSearchResults(searchTaskId);
             const match = searchResults.find(r => r.platform_id === id);
             if (match) {
               const { markSearchResultCollected } = await import('@/lib/supabase-service');
-              await markSearchResultCollected(match.id, data.post_id);
+              await markSearchResultCollected(match.id, collectResult.postId);
             }
           }
         }
@@ -207,26 +205,23 @@ function KeywordSearch() {
       const uncollected = biliResults.filter(r => !collectedIds.has(r.bvid));
       if (uncollected.length === 0) return;
       setBatchCollecting(true);
+      const newCollected = new Set(collectedIds);
       try {
-        const res = await fetch('/api/collect/bilibili-batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bvids: uncollected.map(r => r.bvid), project_id: currentProject?.id }),
-        });
-        const data = await res.json();
-        if (data.results) {
-          const newCollected = new Set(collectedIds);
-          for (const r of data.results) {
-            if (r.imported > 0) newCollected.add(r.bvid);
+        for (const r of uncollected) {
+          const collectResult = await collectBilibiliComments(
+            { bvid: r.bvid, projectId: currentProject?.id, maxComments: 2000 },
+            () => {},
+          );
+          if (collectResult.success && collectResult.imported > 0) {
+            newCollected.add(r.bvid);
           }
-          setCollectedIds(newCollected);
         }
+        setCollectedIds(newCollected);
         if (currentProject) {
           const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
           setPosts(p);
           setComments(c);
-          // Trigger AI analysis after batch collection
-          if (data.total_imported > 0) {
+          if (newCollected.size > collectedIds.size) {
             triggerAnalysis(currentProject.id, undefined, setAnalysisProgress);
           }
         }
@@ -594,6 +589,7 @@ async function triggerAnalysis(
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [url, setUrl] = useState('');
   const [collecting, setCollecting] = useState(false);
+  const [progress, setProgress] = useState<CollectProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     imported: number; duplicates: number; video_title: string; post_id: string; analysisTriggered: boolean;
@@ -617,27 +613,27 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
     setCollecting(true);
     setError(null);
     setResult(null);
+    setProgress(null);
 
     try {
       if (platform === 'bilibili') {
-        const res = await fetch('/api/collect/bilibili', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: url.trim(), max_comments: 5000 }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          setError(mapBilibiliError(data.error));
+        const collectResult = await collectBilibiliComments(
+          { url: url.trim(), projectId: currentProject?.id, maxComments: 2000 },
+          setProgress,
+        );
+
+        if (collectResult.error) {
+          setError(mapBilibiliError(collectResult.error));
         } else {
           let analysisTriggered = false;
-          if (data.imported > 0 && currentProject) {
-            analysisTriggered = await triggerAnalysis(currentProject.id, data.post_id, setAnalysisProgress);
+          if (collectResult.imported > 0 && currentProject) {
+            analysisTriggered = await triggerAnalysis(currentProject.id, collectResult.postId, setAnalysisProgress);
           }
           setResult({
-            imported: data.imported,
-            duplicates: data.duplicates || 0,
-            video_title: data.video_title,
-            post_id: data.post_id,
+            imported: collectResult.imported,
+            duplicates: collectResult.duplicates,
+            video_title: collectResult.videoTitle,
+            post_id: collectResult.postId,
             analysisTriggered,
           });
           setUrl('');
@@ -709,9 +705,31 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
               : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
           )}
         >
-          {collecting ? '采集中...' : '开始采集'}
+          {collecting ? (progress?.message || '采集中...') : '开始采集'}
         </button>
       </div>
+
+      {/* Progress indicator */}
+      {collecting && progress && (
+        <div className="mt-4 max-w-2xl mx-auto animate-fade-in">
+          <div className="p-3 rounded-lg bg-[var(--color-accent-blue)]/5 border border-[var(--color-accent-blue)]/20">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-[var(--color-accent-blue)]">{progress.message}</span>
+              <span className="text-xs text-[var(--color-text-muted)] font-mono">
+                {progress.collected}{progress.estimated ? ` / ~${progress.estimated}` : ''} 条
+              </span>
+            </div>
+            {progress.estimated && progress.estimated > 0 && (
+              <div className="w-full h-1.5 rounded-full bg-[var(--color-bg-deep)] overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-[var(--color-accent-blue)] transition-all duration-500"
+                  style={{ width: `${Math.min(100, (progress.collected / progress.estimated) * 100)}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Error message */}
       {error && (
