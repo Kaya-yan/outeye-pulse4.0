@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useAppStore } from '@/stores/useAppStore';
+import { useAppStore, useCurrentProject, usePosts, useComments } from '@/stores/useAppStore';
 import { cn, formatNumber } from '@/lib/utils';
-import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults } from '@/lib/supabase-service';
+import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults, markSearchResultCollected } from '@/lib/supabase-service';
 import type { RawComment, SearchResult } from '@/lib/supabase-service';
 import { collectBilibiliComments, type CollectProgress } from '@/lib/collect-bilibili';
+import { runAnalysis } from '@/lib/analysis-runner';
 
 // ─── Mode Tabs ─────────────────────────────────────────────────
 type CollectMode = 'url' | 'search';
@@ -177,7 +178,6 @@ function KeywordSearch() {
             const searchResults = await fetchSearchResults(searchTaskId);
             const match = searchResults.find(r => r.platform_id === id);
             if (match) {
-              const { markSearchResultCollected } = await import('@/lib/supabase-service');
               await markSearchResultCollected(match.id, collectResult.postId);
             }
           }
@@ -562,13 +562,12 @@ function KeywordSearch() {
 }
 
 // ─── Shared: trigger AI analysis ───────────────────────────────
-async function triggerAnalysis(
+function triggerAnalysis(
   projectId: string,
   postId: string | undefined,
   setAnalysisProgress: (p: { processed: number; total: number; status: string }) => void,
-): Promise<boolean> {
+): boolean {
   try {
-    const { runAnalysis } = await import('@/lib/analysis-runner');
     runAnalysis(projectId, postId, {
       onProgress: (processed, total) => {
         setAnalysisProgress({ processed, total, status: 'processing' });
@@ -594,6 +593,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [result, setResult] = useState<{
     imported: number; duplicates: number; video_title: string; post_id: string; analysisTriggered: boolean;
   } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const { setAnalysisProgress, currentProject } = useAppStore();
   const router = useRouter();
 
@@ -603,6 +603,11 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
     return null;
   };
 
+  const handleCancel = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  };
+
   const handleCollect = async () => {
     const platform = detectPlatform(url);
     if (!platform) {
@@ -610,6 +615,8 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
       return;
     }
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     setCollecting(true);
     setError(null);
     setResult(null);
@@ -618,9 +625,14 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
     try {
       if (platform === 'bilibili') {
         const collectResult = await collectBilibiliComments(
-          { url: url.trim(), projectId: currentProject?.id, maxComments: 50000 },
+          { url: url.trim(), projectId: currentProject?.id, maxComments: 50000, signal: controller.signal },
           setProgress,
         );
+
+        if (collectResult.error === '采集已取消') {
+          setProgress(null);
+          return;
+        }
 
         if (collectResult.error) {
           setError(mapBilibiliError(collectResult.error));
@@ -656,9 +668,10 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
         }
       }
     } catch {
-      setError('网络连接失败，请检查网络后重试');
+      if (!controller.signal.aborted) setError('网络连接失败，请检查网络后重试');
     } finally {
       setCollecting(false);
+      abortRef.current = null;
     }
   };
 
@@ -695,18 +708,22 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
             </span>
           )}
         </div>
-        <button
-          onClick={handleCollect}
-          disabled={collecting || !url.trim()}
-          className={cn(
-            'px-6 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex-shrink-0',
-            collecting
-              ? 'bg-[var(--color-accent-blue)]/15 text-[var(--color-accent-blue-glow)]'
-              : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
-          )}
-        >
-          {collecting ? (progress?.message || '采集中...') : '开始采集'}
-        </button>
+        {collecting ? (
+          <button
+            onClick={handleCancel}
+            className="px-6 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex-shrink-0 bg-[var(--color-accent-red)]/15 text-[var(--color-accent-red)] hover:bg-[var(--color-accent-red)]/25"
+          >
+            取消采集
+          </button>
+        ) : (
+          <button
+            onClick={handleCollect}
+            disabled={!url.trim()}
+            className="px-6 py-3 rounded-lg text-sm font-medium transition-all duration-200 flex-shrink-0 bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]"
+          >
+            开始采集
+          </button>
+        )}
       </div>
 
       {/* Progress indicator */}

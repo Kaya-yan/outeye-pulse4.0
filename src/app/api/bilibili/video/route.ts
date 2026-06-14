@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchVideoInfo } from '@/lib/bilibili-wbi';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -12,24 +13,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const url = `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com',
-        'Accept': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
+    const data = await fetchVideoInfo(bvid);
+    if (!data) {
       return NextResponse.json(
-        { code: -1, message: `Bilibili API HTTP ${response.status}: ${response.statusText}` },
-        { status: response.status }
+        { code: -1, message: 'Video not found or API error' },
+        { status: 404 }
       );
     }
-
-    const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json({ code: 0, data });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Bilibili video API error:', msg);

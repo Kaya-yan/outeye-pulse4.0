@@ -4,10 +4,11 @@ import { simpleHash, computeSampling, findExistingHashes, AD_PATTERN } from '@/l
 
 const supabase = createServerClient();
 
+const INSERT_CHUNK = 300; // rows per batch insert to avoid Supabase timeout
+
 /**
  * POST /api/collect/bilibili/import
  * Lightweight endpoint to insert pre-collected comments into DB.
- * Called by the frontend after client-side pagination is complete.
  * Body: { postId, projectId, sourceUrl, comments: { text, likes, username, createTime, rpid }[] }
  */
 export async function POST(request: NextRequest) {
@@ -43,33 +44,36 @@ export async function POST(request: NextRequest) {
         duplicates++;
         continue;
       }
+      const likes = valid[i].likes || 0;
       toInsert.push({
         post_id: postId,
         project_id: projectId,
         text: valid[i].text,
-        likes: valid[i].likes || 0,
+        likes,
         source_tool: 'client-paginate',
         source_url: sourceUrl,
         content_hash: hashes[i],
-        ...computeSampling(valid[i].likes || 0),
+        ...computeSampling(likes),
       });
     }
 
     let imported = 0;
     const errors: string[] = [];
 
-    if (toInsert.length > 0) {
-      // Try batch insert first
-      const { error } = await supabase.from('comments').insert(toInsert);
+    // Chunked batch insert
+    for (let i = 0; i < toInsert.length; i += INSERT_CHUNK) {
+      const chunk = toInsert.slice(i, i + INSERT_CHUNK);
+      const { error } = await supabase.from('comments').insert(chunk);
+
       if (!error) {
-        imported = toInsert.length;
+        imported += chunk.length;
       } else {
-        // Fallback: one by one
-        for (const row of toInsert) {
+        // Fallback: one by one for this chunk
+        for (const row of chunk) {
           const { error: e } = await supabase.from('comments').insert(row);
           if (!e) {
             imported++;
-          } else if (errors.length < 3) {
+          } else if (errors.length < 5) {
             errors.push(e.message);
           }
         }

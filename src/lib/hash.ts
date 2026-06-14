@@ -1,4 +1,5 @@
 import type { SamplingConfig } from '@/types';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const AD_PATTERN = /加微信|私聊|优惠|折扣|代购|链接|下单|购买|vx|淘宝|拼多多/i;
 
@@ -47,8 +48,7 @@ const CHUNK_SIZE = 500;
  * Given an array of content hashes, queries the DB for which ones already exist.
  * Returns a Set of existing hashes for O(1) lookup.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function findExistingHashes(supabase: any, hashes: string[]): Promise<Set<string>> {
+export async function findExistingHashes(supabase: SupabaseClient, hashes: string[]): Promise<Set<string>> {
   const existing = new Set<string>();
   for (let i = 0; i < hashes.length; i += CHUNK_SIZE) {
     const chunk = hashes.slice(i, i + CHUNK_SIZE);

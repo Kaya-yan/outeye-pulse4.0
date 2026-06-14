@@ -6,7 +6,10 @@ import { useAppStore } from '@/stores/useAppStore';
 import { fetchProjects, fetchPosts, fetchComments } from '@/lib/supabase-service';
 
 export function useProjectData() {
-  const { setProjects, setCurrentProject, setPosts, setComments } = useAppStore();
+  const setProjects = useAppStore((s) => s.setProjects);
+  const setCurrentProject = useAppStore((s) => s.setCurrentProject);
+  const setPosts = useAppStore((s) => s.setPosts);
+  const setComments = useAppStore((s) => s.setComments);
 
   const fetcher = useCallback(async () => {
     const projects = await fetchProjects();

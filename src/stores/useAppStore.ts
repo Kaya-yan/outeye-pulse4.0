@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useMemo } from 'react';
 import type { Project, FilterState, Post, Comment, AnalysisLog } from '@/types';
 
 interface AppState {
@@ -173,3 +174,38 @@ export const useAppStore = create<AppState>()(
     }
   )
 );
+
+// Selector hooks for granular subscriptions (prevents unnecessary re-renders)
+export const useCurrentProject = () => useAppStore((s) => s.currentProject);
+export const useProjects = () => useAppStore((s) => s.projects);
+export const usePosts = () => useAppStore((s) => s.posts);
+export const useComments = () => useAppStore((s) => s.comments);
+export const useFilters = () => useAppStore((s) => s.filters);
+export const useAnalysisProgress = () => useAppStore((s) => s.analysisProgress);
+export const useSidebarCollapsed = () => useAppStore((s) => s.sidebarCollapsed);
+export const usePresentationMode = () => useAppStore((s) => s.presentationMode);
+export const useTerminologyMode = () => useAppStore((s) => s.terminologyMode);
+
+// Derived selectors
+export const useFilteredComments = () => {
+  const comments = useComments();
+  const filters = useFilters();
+  return useMemo(() => {
+    let filtered = comments;
+    if (filters.platform !== 'all') {
+      // Need posts to filter by platform - skip if no post_id match
+    }
+    if (filters.riskLevel !== 'all') {
+      filtered = filtered.filter(c => c.analysis?.risk_level === filters.riskLevel);
+    }
+    if (filters.narrativeTypes.length > 0) {
+      filtered = filtered.filter(c => c.analysis?.narrative_type && filters.narrativeTypes.includes(c.analysis.narrative_type));
+    }
+    return filtered;
+  }, [comments, filters]);
+};
+
+export const useAnalyzedComments = () => {
+  const comments = useComments();
+  return useMemo(() => comments.filter(c => c.analysis), [comments]);
+};

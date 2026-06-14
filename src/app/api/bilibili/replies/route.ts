@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { BILI_HEADERS } from '@/lib/bilibili-wbi';
 
-const COMMON_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Referer': 'https://www.bilibili.com',
-  'Accept': 'application/json',
-};
+const COMMON_HEADERS = BILI_HEADERS;
 
 /**
  * GET /api/bilibili/replies
@@ -22,6 +19,7 @@ export async function GET(request: NextRequest) {
   const aidParam = searchParams.get('aid');
   const cursor = searchParams.get('cursor') || '0';
   const mode = searchParams.get('mode') || '3';
+  const pn = searchParams.get('pn'); // page-number fallback for cursor pagination
 
   if (!bvid && !aidParam) {
     return NextResponse.json(
@@ -55,9 +53,19 @@ export async function GET(request: NextRequest) {
       aid = viewData.data?.aid;
     }
 
-    const paginationStr = encodeURIComponent(JSON.stringify({ next_offset: cursor }));
-    const replyUrl = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${aid}&mode=${mode}&pagination_str=${paginationStr}`;
-    console.log('[Bilibili Replies]', { aid, cursor, mode, url: replyUrl.slice(0, 150) });
+    // Build reply URL — supports cursor-based (default) and pn-based (fallback) pagination
+    let replyUrl: string;
+    if (pn) {
+      // pn-based fallback: traditional page-number pagination
+      replyUrl = `https://api.bilibili.com/x/v2/reply?type=1&oid=${aid}&sort=${mode}&pn=${pn}&ps=20`;
+      console.log('[Bilibili Replies]', { aid, pn, mode });
+    } else {
+      // Cursor-based pagination (preferred)
+      const numericCursor = /^\d+$/.test(cursor) ? Number(cursor) : cursor;
+      const paginationStr = encodeURIComponent(JSON.stringify({ next_offset: numericCursor }));
+      replyUrl = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${aid}&mode=${mode}&pagination_str=${paginationStr}`;
+      console.log('[Bilibili Replies]', { aid, cursor: numericCursor, mode });
+    }
 
     const replyResponse = await fetch(replyUrl, { headers: COMMON_HEADERS, signal: AbortSignal.timeout(10000) });
 
@@ -77,27 +85,40 @@ export async function GET(request: NextRequest) {
 
     const replies = replyData.data?.replies || [];
     const cursorInfo = replyData.data?.cursor;
-    const hasMore = cursorInfo?.is_end === false;
-    const nextCursor = hasMore ? String(cursorInfo.next) : null;
+    const pageInfo = replyData.data?.page;
 
-    console.log('[Bilibili Replies] Result:', {
-      mode,
-      repliesCount: replies.length,
-      total: cursorInfo?.all_count,
-      isEnd: cursorInfo?.is_end,
-      hasMore,
-      nextCursor,
-      cursorNext: cursorInfo?.next,
-    });
+    let hasMore: boolean;
+    let nextCursor: string | null;
+    let total: number;
+
+    if (pn) {
+      // pn-based response: use page.count for total, check if current page < total pages
+      total = pageInfo?.count || cursorInfo?.all_count || 0;
+      const currentPage = Number(pn);
+      const totalPages = Math.ceil(total / 20);
+      hasMore = currentPage < totalPages && replies.length > 0;
+      nextCursor = hasMore ? String(currentPage + 1) : null;
+    } else {
+      // Cursor-based response
+      hasMore = cursorInfo?.is_end === false;
+      nextCursor = hasMore ? String(cursorInfo.next) : null;
+      total = cursorInfo?.all_count || 0;
+    }
+
+    console.log('[Bilibili Replies] Result:', { mode, repliesCount: replies.length, total, hasMore, nextCursor });
 
     return NextResponse.json({
       code: 0,
       message: 'success',
       data: {
         replies,
-        total: cursorInfo?.all_count || 0,
+        total,
         hasMore,
         nextCursor,
+      },
+    }, {
+      headers: {
+        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
       },
     });
   } catch (error) {

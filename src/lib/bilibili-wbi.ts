@@ -191,6 +191,61 @@ export async function fetchVideoInfo(bvid: string) {
   } catch { return null; }
 }
 
+export interface BiliSubtitle {
+  lan: string;
+  lan_doc: string;
+  subtitle_url: string;
+}
+
+/**
+ * Fetch subtitle list for a video.
+ * Returns available subtitles (may be empty if video has no subtitles).
+ */
+export async function fetchSubtitleList(bvid: string, cid: number): Promise<BiliSubtitle[]> {
+  try {
+    const resp = await fetch(
+      `https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${cid}`,
+      { headers: BILI_HEADERS, signal: AbortSignal.timeout(10000) },
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    if (data.code !== 0) return [];
+    return data.data?.subtitle?.subtitles || [];
+  } catch { return []; }
+}
+
+/**
+ * Fetch subtitle content from URL (B站字幕 URL 需要加 https: 前缀).
+ * Returns the parsed subtitle JSON array.
+ */
+export async function fetchSubtitleContent(subtitleUrl: string): Promise<{ content: string; from: number; to: number }[]> {
+  try {
+    const fullUrl = subtitleUrl.startsWith('//') ? `https:${subtitleUrl}` : subtitleUrl;
+    const resp = await fetch(fullUrl, { signal: AbortSignal.timeout(10000) });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.body || [];
+  } catch { return []; }
+}
+
+/**
+ * Merge subtitle segments into a single text string.
+ * Deduplicates consecutive identical segments.
+ */
+export function mergeSubtitleText(segments: { content: string; from: number; to: number }[]): string {
+  if (segments.length === 0) return '';
+  const parts: string[] = [];
+  let last = '';
+  for (const seg of segments) {
+    const text = seg.content.trim();
+    if (text && text !== last) {
+      parts.push(text);
+      last = text;
+    }
+  }
+  return parts.join('');
+}
+
 export async function fetchReplies(
   oid: number, nextOffset: number, mode: number,
 ): Promise<{ replies: BiliReply[]; nextCursor: number; isEnd: boolean }> {

@@ -130,7 +130,7 @@ export async function fetchComments(projectId: string, filters?: {
 }): Promise<Comment[]> {
   let query = supabase
     .from('comments')
-    .select('*')
+    .select('id, post_id, project_id, text, likes, sampling_tier, is_sampled, analysis, analysis_status, rpid, source_tool, source_url, content_hash, is_empty, is_offensive, is_ad, is_irrelevant, human_corrected, created_at')
     .eq('project_id', projectId);
 
   if (filters?.postId) {

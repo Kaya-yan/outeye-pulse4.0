@@ -3,6 +3,8 @@
  * Drives the batch loop by calling POST /api/analysis repeatedly.
  */
 
+import { sleep } from '@/lib/hash';
+
 export interface AnalysisRunnerCallbacks {
   onProgress: (processed: number, total: number, progress: number) => void;
   onDone: (processed: number, failed: number, total: number) => void;
@@ -74,8 +76,7 @@ export async function runAnalysis(
             callbacks.onError(`连续 ${MAX_CONSECUTIVE_ERRORS} 次失败: ${batchData.error}`);
             return;
           }
-          // Wait before retry
-          await new Promise(r => setTimeout(r, 2000));
+          await sleep(2000);
           continue;
         }
 
@@ -85,8 +86,7 @@ export async function runAnalysis(
         done = batchData.done;
 
         if (!done) {
-          // Small delay between batches to avoid overwhelming the API
-          await new Promise(r => setTimeout(r, 500));
+          await sleep(500);
         }
       } catch (err) {
         if (signal.aborted) return;
@@ -95,7 +95,7 @@ export async function runAnalysis(
           callbacks.onError(`网络错误，连续 ${MAX_CONSECUTIVE_ERRORS} 次失败`);
           return;
         }
-        await new Promise(r => setTimeout(r, 2000));
+        await sleep(2000);
       }
     }
 

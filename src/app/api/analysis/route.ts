@@ -42,12 +42,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Clean up orphaned processing state from previous interrupted runs
-    try {
-      await supabase
-        .from('comments')
-        .update({ analysis_status: 'pending' })
-        .eq('analysis_status', 'processing');
-    } catch { /* analysis_status column may not exist yet */ }
+    await supabase
+      .from('comments')
+      .update({ analysis_status: 'pending' })
+      .eq('analysis_status', 'processing');
 
     // Resolve comments to analyze
     let comments: { id: string }[] = [];
@@ -155,12 +153,29 @@ async function processNextBatch(logId: string, projectId?: string) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
   }
 
+  // Fetch video subtitle context for better analysis
+  let videoContext: string | undefined;
+  if (comments && comments.length > 0) {
+    // Get the first comment's post_id to find the video content
+    const firstCommentPostId = (comments[0] as Record<string, unknown>).post_id;
+    if (firstCommentPostId) {
+      const { data: post } = await supabase
+        .from('posts')
+        .select('content, title')
+        .eq('id', firstCommentPostId)
+        .single();
+      if (post?.content) {
+        videoContext = `标题: ${post.title || ''}\n内容: ${post.content}`;
+      }
+    }
+  }
+
   if (!comments || comments.length === 0) {
     // No more comments to process — mark as completed
     await supabase
       .from('analysis_logs')
       .update({
-        status: log.failed_comments > 0 ? 'completed' : 'completed',
+        status: 'completed',
         completed_at: new Date().toISOString(),
         error_message: log.failed_comments > 0 ? `${log.failed_comments} 条分析失败` : null,
       })
@@ -188,7 +203,7 @@ async function processNextBatch(logId: string, projectId?: string) {
   let tokens = 0;
 
   try {
-    const result = await analyzeBatch(comments);
+    const result = await analyzeBatch(comments, videoContext);
     processed = result.processed;
     tokens = result.tokens;
 
@@ -301,7 +316,7 @@ export async function GET(request: NextRequest) {
 
 // ─── AI helpers ────────────────────────────────────────────────
 
-async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ processed: number; tokens: number; succeededIds: string[] }> {
+async function analyzeBatch(batch: { id: string; text: string }[], videoContext?: string): Promise<{ processed: number; tokens: number; succeededIds: string[] }> {
   const mimoApiKey = process.env.MIMO_API_KEY;
   const mimoApiUrl = process.env.MIMO_API_URL || 'https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages';
 
@@ -321,7 +336,12 @@ async function analyzeBatch(batch: { id: string; text: string }[]): Promise<{ pr
     textToIds.get(key)!.push(c.id);
   }
 
-  const userContent = uniqueTexts
+  // Build user content with optional video context
+  let userContent = '';
+  if (videoContext) {
+    userContent += `【视频内容摘要】\n${videoContext.slice(0, 2000)}\n\n【待分析评论】\n`;
+  }
+  userContent += uniqueTexts
     .map((text, i) => `【${i + 1}】${text}`)
     .join('\n');
 

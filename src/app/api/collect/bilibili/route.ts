@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
-import { fetchVideoInfo } from '@/lib/bilibili-wbi';
+import { fetchVideoInfo, fetchSubtitleList, fetchSubtitleContent, mergeSubtitleText } from '@/lib/bilibili-wbi';
 
 const supabase = createServerClient();
 
 /**
  * POST /api/collect/bilibili
- * Fast init endpoint: fetch video info + create post record.
+ * Fast init endpoint: fetch video info + create post record + extract subtitle.
  * Returns postId and aid so the CLIENT can paginate comments.
  * Typical execution: 2-4 seconds.
  *
@@ -40,7 +40,22 @@ export async function POST(request: NextRequest) {
 
     project_id = resolvedProjectId;
     const aid = videoInfo.aid;
+    const cid = videoInfo.cid;
     const sourceUrl = `https://www.bilibili.com/video/${bvid}`;
+
+    // Fetch subtitle in background (non-blocking, best-effort)
+    let subtitleText = '';
+    if (cid) {
+      try {
+        const subtitles = await fetchSubtitleList(bvid, cid);
+        // Prefer Chinese subtitle, fallback to first available
+        const zhSub = subtitles.find(s => s.lan.startsWith('zh')) || subtitles[0];
+        if (zhSub) {
+          const segments = await fetchSubtitleContent(zhSub.subtitle_url);
+          subtitleText = mergeSubtitleText(segments);
+        }
+      } catch { /* subtitle extraction is non-fatal */ }
+    }
 
     // Create or find post record
     let postId: string;
@@ -50,18 +65,23 @@ export async function POST(request: NextRequest) {
       .eq('url', sourceUrl)
       .single();
 
+    const postMeta: Record<string, unknown> = {
+      title: videoInfo.title,
+      creator_name: videoInfo.owner?.name || '',
+      author_name_mask: videoInfo.owner?.name || '',
+      likes: videoInfo.stat?.like || 0,
+      view_count: videoInfo.stat?.view || 0,
+    };
+    if (subtitleText) {
+      postMeta.content = subtitleText;
+    }
+
     if (existingPost) {
       postId = existingPost.id;
       // Update metadata from fresh video info (in case it was missing or stale)
       await supabase
         .from('posts')
-        .update({
-          title: videoInfo.title,
-          creator_name: videoInfo.owner?.name || '',
-          author_name_mask: videoInfo.owner?.name || '',
-          likes: videoInfo.stat?.like || 0,
-          view_count: videoInfo.stat?.view || 0,
-        })
+        .update(postMeta)
         .eq('id', postId);
     } else {
       const { data: newPost, error: postErr } = await supabase
@@ -70,11 +90,7 @@ export async function POST(request: NextRequest) {
           project_id,
           platform: 'bilibili',
           url: sourceUrl,
-          title: videoInfo.title,
-          author_name_mask: videoInfo.owner?.name || '',
-          creator_name: videoInfo.owner?.name || '',
-          likes: videoInfo.stat?.like || 0,
-          view_count: videoInfo.stat?.view || 0,
+          ...postMeta,
           collected_by: 'client-paginate',
           is_aigc: false,
         })
@@ -100,6 +116,7 @@ export async function POST(request: NextRequest) {
         likes: videoInfo.stat?.like,
         replies: videoInfo.stat?.reply,
       },
+      has_subtitle: !!subtitleText,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
