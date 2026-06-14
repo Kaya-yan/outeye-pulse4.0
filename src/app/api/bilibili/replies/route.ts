@@ -53,14 +53,20 @@ export async function GET(request: NextRequest) {
       aid = viewData.data?.aid;
     }
 
-    // Build reply URL — supports cursor-based (default) and pn-based (fallback) pagination
+    // Build reply URL
+    // x/v2/reply uses sort: 0=time, 2=hot
+    // x/v2/reply/main uses mode: 2=time, 3=hot
+    // Client sends mode values (2=time, 3=hot), convert to sort for pn-based API
+    const sortMap: Record<string, number> = { '2': 0, '3': 2 };
+    const sort = sortMap[mode] ?? 0;
+
     let replyUrl: string;
     if (pn) {
-      // pn-based fallback: traditional page-number pagination
-      replyUrl = `https://api.bilibili.com/x/v2/reply?type=1&oid=${aid}&sort=${mode}&pn=${pn}&ps=20`;
-      console.log('[Bilibili Replies]', { aid, pn, mode });
+      // pn-based pagination: reliable, standard page-number approach
+      replyUrl = `https://api.bilibili.com/x/v2/reply?type=1&oid=${aid}&sort=${sort}&pn=${pn}&ps=20`;
+      console.log('[Bilibili Replies]', { aid, pn, sort, mode });
     } else {
-      // Cursor-based pagination (preferred)
+      // Cursor-based pagination (legacy)
       const numericCursor = /^\d+$/.test(cursor) ? Number(cursor) : cursor;
       const paginationStr = encodeURIComponent(JSON.stringify({ next_offset: numericCursor }));
       replyUrl = `https://api.bilibili.com/x/v2/reply/main?type=1&oid=${aid}&mode=${mode}&pagination_str=${paginationStr}`;
@@ -95,8 +101,9 @@ export async function GET(request: NextRequest) {
       // pn-based response: use page.count for total, check if current page < total pages
       total = pageInfo?.count || cursorInfo?.all_count || 0;
       const currentPage = Number(pn);
-      const totalPages = Math.ceil(total / 20);
-      hasMore = currentPage < totalPages && replies.length > 0;
+      const totalPages = total > 0 ? Math.ceil(total / 20) : 999;
+      // hasMore: if we got a full page of replies, assume there might be more
+      hasMore = replies.length >= 20 && currentPage < totalPages;
       nextCursor = hasMore ? String(currentPage + 1) : null;
     } else {
       // Cursor-based response

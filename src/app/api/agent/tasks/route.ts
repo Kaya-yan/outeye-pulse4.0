@@ -43,7 +43,9 @@ export async function GET(request: NextRequest) {
       .limit(20);
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      // Table might not exist — return empty instead of 500
+      console.warn('[Agent Tasks] Query error (table may not exist):', error.message);
+      return NextResponse.json({ tasks: [] });
     }
 
     return NextResponse.json({ tasks: data || [] });
@@ -112,25 +114,43 @@ export async function POST(request: NextRequest) {
 /**
  * PATCH /api/agent/tasks
  * Update task status (complete, fail, heartbeat).
- * Body: { task_id, status, error_message? }
+ * Supports both query param (?id=xxx) and body ({ task_id }) for task ID.
+ * Body: { task_id?, status, error_message? }
  */
 export async function PATCH(request: NextRequest) {
   try {
-    const { task_id, status, error_message } = await request.json();
+    const body = await request.json();
+    // Accept task ID from query param or body
+    const task_id = request.nextUrl.searchParams.get('id') || body.task_id;
+    const { status, error_message } = body;
 
     if (!task_id || !status) {
       return NextResponse.json({ error: 'task_id and status required' }, { status: 400 });
     }
 
     if (status === 'completed') {
-      const { error } = await supabase.rpc('complete_task', { task_uuid: task_id });
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      // Try RPC first, fallback to direct update
+      const { error: rpcError } = await supabase.rpc('complete_task', { task_uuid: task_id });
+      if (rpcError) {
+        const { error } = await supabase
+          .from('task_queue')
+          .update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('id', task_id);
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      }
     } else if (status === 'failed') {
-      const { error } = await supabase.rpc('fail_task', {
+      // Try RPC first, fallback to direct update
+      const { error: rpcError } = await supabase.rpc('fail_task', {
         task_uuid: task_id,
         error_msg: error_message || 'unknown error',
       });
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (rpcError) {
+        const { error } = await supabase
+          .from('task_queue')
+          .update({ status: 'failed', error_message: error_message || 'unknown error' })
+          .eq('id', task_id);
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      }
     } else if (status === 'running') {
       const { error } = await supabase
         .from('task_queue')

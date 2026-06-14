@@ -1,6 +1,6 @@
 /**
  * Client-side Bilibili comment collector.
- * Client-driven pagination loop — each API call stays under 5 seconds.
+ * Uses pn-based pagination for reliability.
  */
 
 import { sleep } from '@/lib/hash';
@@ -25,36 +25,36 @@ export interface CollectResult {
   error?: string;
 }
 
-
 // ── Pagination helpers ──────────────────────────────────────────
 
 interface PageResult {
   replies: BiliReply[];
   hasMore: boolean;
-  nextCursor: string | null;
   total: number;
 }
 
+/**
+ * Fetch one page using pn-based pagination (reliable, no cursor parsing issues).
+ */
 async function fetchOnePage(
   aid: number,
-  cursor: string,
+  pn: number,
   mode: number,
   signal?: AbortSignal,
 ): Promise<PageResult> {
-  const res = await fetch(`/api/bilibili/replies?aid=${aid}&cursor=${cursor}&mode=${mode}`, { signal });
+  const res = await fetch(`/api/bilibili/replies?aid=${aid}&mode=${mode}&pn=${pn}`, { signal });
   const data = await res.json();
   if (data.code !== 0) throw new Error(`B站 API code ${data.code}`);
   return {
     replies: data.data?.replies || [],
     hasMore: data.data?.hasMore ?? false,
-    nextCursor: data.data?.nextCursor ?? null,
     total: data.data?.total ?? 0,
   };
 }
 
 /**
- * Collect all comments for a Bilibili video using client-side pagination.
- * Supports AbortController for cancellation.
+ * Collect all comments for a Bilibili video.
+ * Uses pn-based pagination for maximum reliability.
  */
 export async function collectBilibiliComments(
   params: {
@@ -85,6 +85,7 @@ export async function collectBilibiliComments(
     project_id: string | null;
     video_title: string;
     video_stats?: { views?: number; likes?: number; replies?: number };
+    has_subtitle?: boolean;
     error?: string;
   };
 
@@ -110,8 +111,9 @@ export async function collectBilibiliComments(
   const { postId, aid, sourceUrl, video_title, video_stats } = initData;
   const projectId = initData.project_id;
 
-  // ── Phase 2: Paginated comment fetching ──
-  onProgress({ phase: 'fetching', message: '开始采集评论...', collected: 0, estimated: video_stats?.replies });
+  // ── Phase 2: Paginated comment fetching (pn-based) ──
+  const estimatedTotal = video_stats?.replies || maxComments;
+  onProgress({ phase: 'fetching', message: '开始采集评论...', collected: 0, estimated: estimatedTotal });
 
   const allReplies: BiliReply[] = [];
   const seenRpids = new Set<number>();
@@ -125,26 +127,24 @@ export async function collectBilibiliComments(
     }
   };
 
-  // Phase 2a: Hot comments (mode=3, first page)
+  // Phase 2a: Hot comments (mode=3, first page only)
   try {
     checkAborted();
-    const hotData = await fetchOnePage(aid, '0', 3, signal);
+    const hotData = await fetchOnePage(aid, 1, 3, signal);
     addReplies(hotData.replies);
     if (hotData.total > 0) {
-      onProgress({ phase: 'fetching', message: `已采集 ${allReplies.length} 条热门评论，继续翻页...`, collected: allReplies.length, estimated: hotData.total });
+      onProgress({ phase: 'fetching', message: `已采集 ${allReplies.length} 条热门评论`, collected: allReplies.length, estimated: hotData.total });
     }
   } catch (e) { console.warn('[Collect] Hot comments fetch failed:', e); }
 
   await sleep(500);
 
-  // Phase 2b: Time-ordered comments (mode=2, paginate)
-  const estimatedTotal = video_stats?.replies || maxComments;
-  const maxPages = Math.min(Math.ceil(maxComments / 20), Math.ceil(estimatedTotal / 20) + 10);
+  // Phase 2b: Time-ordered comments (mode=2, pn-based pagination)
+  const PS = 20; // B站每页20条
+  const maxPages = Math.min(Math.ceil(maxComments / PS), 300); // 硬上限300页=6000条
   let consecutiveEmpty = 0;
-  let cursor = '0';
-  let cursorFailed = false; // track if cursor pagination is broken
 
-  for (let page = 0; page < maxPages && allReplies.length < maxComments; page++) {
+  for (let pn = 1; pn <= maxPages && allReplies.length < maxComments; pn++) {
     checkAborted();
     let retries = 0;
     let success = false;
@@ -152,11 +152,11 @@ export async function collectBilibiliComments(
     while (retries < 3 && !success) {
       checkAborted();
       try {
-        const result = await fetchOnePage(aid, cursor, 2, signal);
+        const result = await fetchOnePage(aid, pn, 2, signal);
 
         if (result.replies.length === 0) {
           consecutiveEmpty++;
-          if (consecutiveEmpty >= 3) break;
+          if (consecutiveEmpty >= 2) break; // 连续2页空数据则结束
           success = true;
         } else {
           consecutiveEmpty = 0;
@@ -165,65 +165,31 @@ export async function collectBilibiliComments(
 
         onProgress({
           phase: 'fetching',
-          message: `已采集 ${allReplies.length} 条评论（第 ${page + 1} 页）...`,
+          message: `已采集 ${allReplies.length} 条评论（第 ${pn} 页）...`,
           collected: allReplies.length,
           estimated: estimatedTotal,
         });
 
+        // 如果没有更多页了
         if (!result.hasMore) {
           consecutiveEmpty = 999;
           break;
         }
 
-        // If cursor didn't advance (same value), mark cursor as broken
-        if (result.nextCursor === cursor) {
-          console.warn('[Collect] Cursor did not advance, switching to pn fallback');
-          cursorFailed = true;
-          break;
-        }
-
-        cursor = result.nextCursor || '0';
         success = true;
       } catch (err) {
         if (signal?.aborted) {
           return { success: false, postId, videoTitle: video_title, collected: allReplies.length, imported: 0, duplicates: 0, filtered: 0, error: '采集已取消' };
         }
         retries++;
-        console.warn(`[Collect] Page ${page + 1} attempt ${retries} failed:`, err);
+        console.warn(`[Collect] Page ${pn} attempt ${retries} failed:`, err);
         if (retries < 3) await sleep(1000 * retries);
       }
     }
 
-    if (consecutiveEmpty >= 3 || cursorFailed) break;
-    await sleep(800 + Math.random() * 1200);
-  }
-
-  // Phase 2c: Fallback — if cursor pagination produced very few results, try pn-based
-  if (allReplies.length < 100 || (allReplies.length < 50 && allReplies.length < estimatedTotal * 0.1)) {
-    console.log('[Collect] Cursor pagination yielded only', allReplies.length, 'comments. Trying pn fallback...');
-    onProgress({ phase: 'fetching', message: `切换到备用分页模式...`, collected: allReplies.length, estimated: estimatedTotal });
-
-    for (let pn = 2; pn <= maxPages && allReplies.length < maxComments; pn++) {
-      checkAborted();
-      try {
-        const res = await fetch(`/api/bilibili/replies?aid=${aid}&mode=2&pn=${pn}`, { signal });
-        const data = await res.json();
-        if (data.code !== 0 || !data.data?.replies || data.data.replies.length === 0) break;
-
-        const before = allReplies.length;
-        addReplies(data.data.replies);
-        if (allReplies.length === before) break; // no new comments
-
-        onProgress({ phase: 'fetching', message: `已采集 ${allReplies.length} 条评论（备用第 ${pn} 页）...`, collected: allReplies.length, estimated: estimatedTotal });
-
-        if (!data.data.hasMore) break;
-        await sleep(800 + Math.random() * 1200);
-      } catch (err) {
-        if (signal?.aborted) break;
-        console.warn(`[Collect] pn fallback page ${pn} failed:`, err);
-        break;
-      }
-    }
+    if (consecutiveEmpty >= 2) break;
+    // 随机延迟防风控
+    await sleep(600 + Math.random() * 800);
   }
 
   // ── Phase 3: Sub-replies for top comments ──
