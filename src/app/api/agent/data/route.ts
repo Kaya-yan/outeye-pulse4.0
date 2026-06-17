@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { buildAgentImportLifecycleArtifacts, createAnalysisTriggerEvent } from '@/lib/agent-data-run';
 import { createServerClient } from '@/lib/supabase';
 import { simpleHash, computeSampling, findExistingHashes, AD_PATTERN } from '@/lib/hash';
 
@@ -34,36 +35,153 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'platform must be xhs or bilibili' }, { status: 400 });
     }
 
-    // Store in agent_data table for staged import
-    const { data: agentData, error: insertError } = await supabase
-      .from('agent_data')
-      .insert({
-        task_id: task_id || null,
-        platform,
-        data_type,
-        raw_data,
-        count: raw_data.length,
-        source_file: source_file || null,
-        status: 'pending',
-      })
-      .select('id')
-      .single();
+    let collectionRunId: string | null = null;
+    let currentRun: Record<string, unknown> | null = null;
 
-    if (insertError) {
-      return NextResponse.json({ error: `agent_data insert failed: ${insertError.message}` }, { status: 500 });
+    if (task_id) {
+      const { data: taskRow } = await supabase
+        .from('task_queue')
+        .select('collection_run_id')
+        .eq('id', task_id)
+        .single();
+
+      collectionRunId = taskRow?.collection_run_id || null;
     }
+
+    if (collectionRunId) {
+      const { data: runRow } = await supabase
+        .from('collection_runs')
+        .select('project_id, platform, source, mode, initiator, target_type, target_value, status, current_stage, failure_code, latest_error, latest_hint, received_count, imported_count, duplicate_count, filtered_count, failed_count, heartbeat_at, started_at, finished_at')
+        .eq('id', collectionRunId)
+        .single();
+
+      currentRun = runRow || null;
+    }
+
+    const insertAgentDataWithRun = async () => {
+      return supabase
+        .from('agent_data')
+        .insert({
+          task_id: task_id || null,
+          collection_run_id: collectionRunId,
+          platform,
+          data_type,
+          raw_data,
+          count: raw_data.length,
+          source_file: source_file || null,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+    };
+
+    const insertAgentDataWithoutRun = async () => {
+      return supabase
+        .from('agent_data')
+        .insert({
+          task_id: task_id || null,
+          platform,
+          data_type,
+          raw_data,
+          count: raw_data.length,
+          source_file: source_file || null,
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+    };
+
+    let agentDataResult = await insertAgentDataWithoutRun();
+
+    if (collectionRunId) {
+      agentDataResult = await insertAgentDataWithRun();
+      if (agentDataResult.error && /collection_run_id/i.test(agentDataResult.error.message)) {
+        agentDataResult = await insertAgentDataWithoutRun();
+      }
+    }
+
+    if (agentDataResult.error) {
+      return NextResponse.json({ error: `agent_data insert failed: ${agentDataResult.error.message}` }, { status: 500 });
+    }
+
+    const agentData = agentDataResult.data;
 
     // Auto-import: batch insert into comments
     const importResult = await importComments(raw_data, platform, project_id);
 
-    // Fire-and-forget: trigger AI analysis if we imported comments and have a project
+    if (collectionRunId && currentRun) {
+      const now = new Date().toISOString();
+      const artifacts = buildAgentImportLifecycleArtifacts({
+        run: currentRun,
+        received: raw_data.length,
+        imported: importResult.imported,
+        duplicates: importResult.duplicates,
+        filtered: importResult.filtered,
+        failed: importResult.failed,
+        now,
+      });
+
+      await supabase
+        .from('collection_runs')
+        .update({
+          ...artifacts.runUpdate,
+          updated_at: now,
+        })
+        .eq('id', collectionRunId);
+
+      await supabase
+        .from('collection_run_events')
+        .insert(artifacts.events.map(event => ({
+          collection_run_id: collectionRunId,
+          ...event,
+        })));
+    }
+
     if (importResult.imported > 0 && project_id) {
       const origin = new URL(request.url).origin;
-      fetch(`${origin}/api/analysis`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project_id }),
-      }).catch(() => { /* non-fatal */ });
+      const now = new Date().toISOString();
+
+      try {
+        const analysisResponse = await fetch(`${origin}/api/analysis`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: project_id }),
+        });
+
+        if (collectionRunId) {
+          const event = createAnalysisTriggerEvent({
+            projectId: project_id,
+            imported: importResult.imported,
+            ok: analysisResponse.ok,
+            errorMessage: analysisResponse.ok ? undefined : `analysis API returned ${analysisResponse.status}`,
+            now,
+          });
+
+          await supabase
+            .from('collection_run_events')
+            .insert({
+              collection_run_id: collectionRunId,
+              ...event,
+            });
+        }
+      } catch (error) {
+        if (collectionRunId) {
+          const event = createAnalysisTriggerEvent({
+            projectId: project_id,
+            imported: importResult.imported,
+            ok: false,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            now,
+          });
+
+          await supabase
+            .from('collection_run_events')
+            .insert({
+              collection_run_id: collectionRunId,
+              ...event,
+            });
+        }
+      }
     }
 
     // Update agent_data status
@@ -101,7 +219,7 @@ async function importComments(
   rawItems: Record<string, unknown>[],
   platform: string,
   projectId?: string
-): Promise<{ imported: number; duplicates: number; errors: number; details: string[] }> {
+): Promise<{ imported: number; duplicates: number; filtered: number; failed: number; errors: number; details: string[] }> {
   const normalized: { text: string; likes: number; username: string; createTime: string; sourceUrl: string; hash: string }[] = [];
   const details: string[] = [];
   let shortOrEmpty = 0;
@@ -122,8 +240,9 @@ async function importComments(
   }
 
   if (normalized.length === 0) {
+    const filtered = shortOrEmpty + adsFiltered;
     details.push(`All ${rawItems.length} items filtered: ${shortOrEmpty} short/empty, ${adsFiltered} ads`);
-    return { imported: 0, duplicates: 0, errors: shortOrEmpty + adsFiltered, details };
+    return { imported: 0, duplicates: 0, filtered, failed: 0, errors: filtered, details };
   }
 
   const existingHashes = await findExistingHashes(supabase, normalized.map(n => n.hash));
@@ -206,8 +325,10 @@ async function importComments(
   if (missingPost > 0) details.push(`${missingPost} missing post (auto-create failed)`);
   if (duplicates > 0) details.push(`${duplicates} duplicates`);
 
-  const errors = shortOrEmpty + adsFiltered + missingPost + (toInsert.length - imported);
-  return { imported, duplicates, errors, details };
+  const filtered = shortOrEmpty + adsFiltered;
+  const failed = missingPost + (toInsert.length - imported);
+  const errors = filtered + failed;
+  return { imported, duplicates, filtered, failed, errors, details };
 }
 
 function extractTitleFromUrl(url: string, platform: string): string {

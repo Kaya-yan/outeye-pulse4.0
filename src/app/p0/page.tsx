@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
+import { getConsoleScript } from '@/lib/bookmarklet-code';
 import { generateDemoProject, computeDemoStats } from '@/lib/demo-data';
 import { fetchProjects, fetchPosts, fetchComments, createProject, createPost, fetchLocalLogs } from '@/lib/supabase-service';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
@@ -45,6 +46,31 @@ interface ImportPreview {
   stats: { total: number; kept: number; removed: number; duplicates: number };
   sampleRows: Record<string, unknown>[];
   removedSample: { row: Record<string, string>; reason: string }[];
+}
+
+interface CollectionRunSummary {
+  id: string;
+  platform: 'xhs' | 'bilibili';
+  source: string;
+  mode: string;
+  target_value: string | null;
+  status: string;
+  current_stage: string;
+  latest_error: string | null;
+  latest_hint: string | null;
+  received_count: number;
+  imported_count: number;
+  duplicate_count: number;
+  filtered_count: number;
+  failed_count: number;
+  heartbeat_at: string | null;
+  created_at: string;
+  latest_event?: {
+    code: string;
+    message: string;
+    created_at: string;
+    level?: string;
+  } | null;
 }
 
 function PlaywrightFaq() {
@@ -93,6 +119,28 @@ const PLAYWRIGHT_FAQ = [
   { q: '采集的 CSV 如何导入系统？', a: '回到上方"数据文件"区域，点击"扫描文件"，找到 output/ 目录下的 CSV，点击"预览"后导入。' },
 ];
 
+const RUN_STATUS_LABELS: Record<string, string> = {
+  draft: '草稿',
+  queued: '排队中',
+  running: '运行中',
+  awaiting_input: '等待输入',
+  importing: '导入中',
+  completed: '已完成',
+  partial_success: '部分完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+const RUN_STAGE_LABELS: Record<string, string> = {
+  init: '初始化',
+  queue: '排队',
+  claim: '领取',
+  crawl: '采集',
+  receive: '接收',
+  import: '导入',
+  finalize: '收尾',
+};
+
 const EnvDot = ({ ok, label }: { ok: boolean; label: string }) => (
   <div className="flex items-center gap-2">
     <span className={`w-2.5 h-2.5 rounded-full ${ok ? 'bg-[#10B981]' : 'bg-[#EF4444]'}`} />
@@ -128,6 +176,8 @@ export default function P0Page() {
     env: true,
     config: true,
     modeB: true,
+    bookmarklet: true,
+    runs: true,
     agentTask: true,
     analysis: true,
     files: true,
@@ -195,11 +245,30 @@ export default function P0Page() {
 
   // ─── Agent task creation ──────────────────────────────────────
   const [taskPlatform, setTaskPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
+  const [bookmarkletPlatform, setBookmarkletPlatform] = useState<'bilibili' | 'xhs'>('bilibili');
   const [taskUrl, setTaskUrl] = useState('');
   const [taskMaxComments, setTaskMaxComments] = useState(2000);
   const [taskCreating, setTaskCreating] = useState(false);
+  const [bookmarkletPreparing, setBookmarkletPreparing] = useState(false);
   const [agentTasks, setAgentTasks] = useState<{ id: string; platform: string; target_url: string; status: string; max_comments: number; created_at: string; error_message?: string }[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [collectionRuns, setCollectionRuns] = useState<CollectionRunSummary[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+
+  const loadCollectionRuns = useCallback(async (projectId?: string | null) => {
+    setRunsLoading(true);
+    try {
+      const query = new URLSearchParams({ limit: '20' });
+      if (projectId) query.set('projectId', projectId);
+      const res = await fetch(`/api/collection/runs?${query.toString()}`);
+      const data = await res.json();
+      setCollectionRuns(data.runs || []);
+    } catch {
+      setCollectionRuns([]);
+    } finally {
+      setRunsLoading(false);
+    }
+  }, []);
 
   const loadAgentTasks = useCallback(async () => {
     setTasksLoading(true);
@@ -237,10 +306,35 @@ export default function P0Page() {
       setToast({ type: 'success', message: '任务已创建，等待本地 Agent 领取' });
       setTaskUrl('');
       loadAgentTasks();
+      loadCollectionRuns(currentProject?.id);
     } catch {
       setToast({ type: 'error', message: '创建失败，请检查网络' });
     } finally {
       setTaskCreating(false);
+    }
+  };
+
+  const handlePrepareBookmarkletRun = async () => {
+    if (!currentProject) { setToast({ type: 'error', message: '请先选择项目' }); return; }
+    setBookmarkletPreparing(true);
+    try {
+      const res = await fetch('/api/collection/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'bookmarklet', project_id: currentProject.id, platform: bookmarkletPlatform }),
+      });
+      const data = await res.json();
+      if (data.error || !data.run?.id) {
+        setToast({ type: 'error', message: data.error || '创建书签采集会话失败' });
+        return;
+      }
+      copyText(getConsoleScript(data.run.id), 'bookmarklet-console-script');
+      setToast({ type: 'success', message: '已创建书签采集会话并复制 Console 脚本' });
+      loadCollectionRuns(currentProject.id);
+    } catch {
+      setToast({ type: 'error', message: '创建书签采集会话失败' });
+    } finally {
+      setBookmarkletPreparing(false);
     }
   };
 
@@ -384,9 +478,13 @@ export default function P0Page() {
 
   useEffect(() => {
     const tasks = isLocal ? [checkEnv(), scanFiles()] : [scanFiles()];
-    tasks.push(loadLocalLogs(), loadFromSupabase(), loadAgentTasks(), loadAnalysisLogs());
+    tasks.push(loadLocalLogs(), loadFromSupabase(), loadAgentTasks(), loadAnalysisLogs(), loadCollectionRuns());
     Promise.allSettled(tasks).then(() => setPageLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadCollectionRuns(currentProject?.id);
+  }, [currentProject?.id, loadCollectionRuns]);
 
   // ─── Import handlers ──────────────────────────────────────────
   const handlePreview = async (file: CsvFile) => {
@@ -633,6 +731,95 @@ export default function P0Page() {
           ))}
         </div>
       </SectionCard>}
+
+      <SectionCard {...sectionCardProps} id="bookmarklet" title="书签采集会话" subtitle="为当前项目创建一次浏览器采集 run，并复制可直接执行的 Console 脚本">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
+          <div>
+            <div className="flex gap-2 mb-3">
+              {(['bilibili', 'xhs'] as const).map(p => (
+                <button key={p} onClick={() => setBookmarkletPlatform(p)}
+                  className={cn('px-4 py-2 rounded-lg text-sm border transition-all', bookmarkletPlatform === p ? 'bg-[#8B5CF6]/20 text-[#A78BFA] border-[#8B5CF6]/40' : 'bg-[#030712] text-[#64748B] border-[#1E293B] hover:border-[#334155]')}>
+                  {p === 'xhs' ? '小红书' : 'B站'}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-[#94A3B8] leading-6">点击右侧按钮后，会先创建一个 <code className="text-[#A78BFA]">bookmarklet</code> 类型的采集运行，然后把带 <code className="text-[#A78BFA]">collection_run_id</code> 的 Console 脚本复制到剪贴板。到目标页面打开开发者工具后直接粘贴执行即可。</p>
+          </div>
+          <button onClick={handlePrepareBookmarkletRun} disabled={bookmarkletPreparing || !currentProject}
+            className="px-4 py-2 rounded-lg bg-[#8B5CF6] text-white text-sm hover:bg-[#7C3AED] transition-colors disabled:opacity-50 whitespace-nowrap">
+            {bookmarkletPreparing ? '创建中...' : '创建会话并复制脚本'}
+          </button>
+        </div>
+      </SectionCard>
+
+      <SectionCard {...sectionCardProps} id="runs" title="采集运行中心" subtitle="统一查看 run 状态、阶段、最新事件与诊断信息">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs text-[#64748B] font-medium">最近运行</span>
+          <button onClick={() => loadCollectionRuns(currentProject?.id)} disabled={runsLoading} className="text-xs text-[#60A5FA] hover:text-[#93C5FD] transition-colors disabled:opacity-50">
+            {runsLoading ? '刷新中...' : '刷新'}
+          </button>
+        </div>
+
+        {collectionRuns.length === 0 ? (
+          <div className="text-center py-8 text-[#64748B] text-sm">
+            暂无采集运行。创建任务、导入 agent 数据或执行 bookmarklet 后，这里会出现统一运行视图。
+          </div>
+        ) : (
+          <div className="space-y-3 max-h-[32rem] overflow-y-auto">
+            {collectionRuns.map(run => (
+              <div key={run.id} className="bg-[#030712] rounded-lg p-4 border border-[#1E293B]">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn('px-2 py-0.5 rounded text-xs font-medium', run.platform === 'xhs' ? 'bg-[#FE2C55]/10 text-[#FE2C55]' : 'bg-[#00A1D6]/10 text-[#00A1D6]')}>
+                      {run.platform === 'xhs' ? '小红书' : 'B站'}
+                    </span>
+                    <span className={cn('px-2 py-0.5 rounded text-xs',
+                      run.status === 'completed' ? 'bg-[#10B981]/10 text-[#10B981]' :
+                      run.status === 'failed' ? 'bg-[#EF4444]/10 text-[#EF4444]' :
+                      run.status === 'partial_success' ? 'bg-[#F59E0B]/10 text-[#F59E0B]' :
+                      run.status === 'running' || run.status === 'importing' ? 'bg-[#3B82F6]/10 text-[#60A5FA]' :
+                      'bg-[#8B5CF6]/10 text-[#A78BFA]')}>
+                      {RUN_STATUS_LABELS[run.status] || run.status}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-xs bg-[#111827] text-[#94A3B8] border border-[#1E293B]">
+                      {RUN_STAGE_LABELS[run.current_stage] || run.current_stage}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-xs bg-[#111827] text-[#64748B] border border-[#1E293B]">
+                      {run.source}
+                    </span>
+                  </div>
+                  <span className="text-xs text-[#64748B] whitespace-nowrap">
+                    {new Date(run.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+
+                <p className="text-xs text-[#94A3B8] font-mono truncate mb-2">{run.target_value || '—'}</p>
+
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2 text-xs">
+                  <div className="bg-[#020617] rounded px-2 py-1 border border-[#1E293B]"><span className="text-[#64748B]">收到</span><span className="text-[#E2E8F0] ml-2">{run.received_count}</span></div>
+                  <div className="bg-[#020617] rounded px-2 py-1 border border-[#1E293B]"><span className="text-[#64748B]">导入</span><span className="text-[#E2E8F0] ml-2">{run.imported_count}</span></div>
+                  <div className="bg-[#020617] rounded px-2 py-1 border border-[#1E293B]"><span className="text-[#64748B]">去重</span><span className="text-[#E2E8F0] ml-2">{run.duplicate_count}</span></div>
+                  <div className="bg-[#020617] rounded px-2 py-1 border border-[#1E293B]"><span className="text-[#64748B]">过滤</span><span className="text-[#E2E8F0] ml-2">{run.filtered_count}</span></div>
+                  <div className="bg-[#020617] rounded px-2 py-1 border border-[#1E293B]"><span className="text-[#64748B]">失败</span><span className="text-[#E2E8F0] ml-2">{run.failed_count}</span></div>
+                </div>
+
+                {run.latest_event && (
+                  <div className="text-xs text-[#94A3B8] mb-1">
+                    <span className="text-[#64748B]">最新事件：</span>
+                    <span className="text-[#E2E8F0]">{run.latest_event.code}</span>
+                    <span className="mx-1 text-[#475569]">·</span>
+                    <span>{run.latest_event.message}</span>
+                  </div>
+                )}
+
+                {run.latest_hint && <p className="text-xs text-[#F59E0B]">建议：{run.latest_hint}</p>}
+                {!run.latest_hint && run.latest_error && <p className="text-xs text-[#EF4444]">错误：{run.latest_error}</p>}
+                {run.heartbeat_at && <p className="text-[11px] text-[#64748B] mt-1">心跳：{new Date(run.heartbeat_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       <SectionCard {...sectionCardProps} id="agentTask" title="云端采集任务" subtitle="创建任务 → 本地 Agent 执行 → 自动导入 Supabase">
         <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-6">

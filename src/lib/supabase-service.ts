@@ -1,3 +1,4 @@
+import { buildBookmarkletLinkLifecycleArtifacts } from './bookmarklet-run';
 import { supabase } from './supabase';
 import type { Project, Post, Comment, AnalysisLog } from '@/types';
 
@@ -387,6 +388,7 @@ export interface RawComment {
   status?: 'pending' | 'linked' | 'ignored';
   post_id?: string;
   project_id?: string;
+  collection_run_id?: string;
 }
 
 export async function fetchPendingRawComments(): Promise<RawComment[]> {
@@ -415,6 +417,8 @@ export async function linkRawComments(
     .eq('status', 'pending');
 
   if (fetchErr || !raw || raw.length === 0) return 0;
+
+  const collectionRunId = raw.find(r => r.collection_run_id)?.collection_run_id || null;
 
   // Dedup by rpid
   const { data: existing } = await supabase
@@ -453,6 +457,41 @@ export async function linkRawComments(
     .update({ status: 'linked', post_id: postId, project_id: projectId })
     .eq('source_id', sourceId)
     .eq('status', 'pending');
+
+  if (collectionRunId) {
+    const { data: runRow } = await supabase
+      .from('collection_runs')
+      .select('project_id, platform, source, mode, initiator, target_type, target_value, status, current_stage, failure_code, latest_error, latest_hint, received_count, imported_count, duplicate_count, filtered_count, failed_count, heartbeat_at, started_at, finished_at')
+      .eq('id', collectionRunId)
+      .single();
+
+    if (runRow) {
+      const now = new Date().toISOString();
+      const duplicates = Math.max(0, raw.length - toInsert.length);
+      const artifacts = buildBookmarkletLinkLifecycleArtifacts({
+        run: runRow,
+        imported: toInsert.length,
+        duplicates,
+        failed: 0,
+        now,
+      });
+
+      await supabase
+        .from('collection_runs')
+        .update({
+          ...artifacts.runUpdate,
+          updated_at: now,
+        })
+        .eq('id', collectionRunId);
+
+      await supabase
+        .from('collection_run_events')
+        .insert(artifacts.events.map(event => ({
+          collection_run_id: collectionRunId,
+          ...event,
+        })));
+    }
+  }
 
   return toInsert.length;
 }

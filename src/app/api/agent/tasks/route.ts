@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { buildAgentTaskCreationArtifacts } from '@/lib/agent-task-run';
+import { createRunEvent, markRunRunning, type CollectionRunState } from '@/lib/collection-run-state';
 import { createServerClient } from '@/lib/supabase';
 
 const supabase = createServerClient();
@@ -70,6 +72,8 @@ export async function POST(request: NextRequest) {
       config_json = {},
       priority = 0,
       scheduled_at,
+      project_id,
+      projectId,
     } = body;
 
     if (!platform || !target_url) {
@@ -82,29 +86,78 @@ export async function POST(request: NextRequest) {
 
     const maxC = Math.max(1, Math.min(50000, Number(max_comments) || 2000));
     const prio = Math.max(-100, Math.min(100, Number(priority) || 0));
+    const now = scheduled_at || new Date().toISOString();
+    const resolvedProjectId = project_id || projectId || null;
 
-    const { data, error } = await supabase
-      .from('task_queue')
-      .insert({
-        platform,
-        target_url,
-        task_type,
-        max_comments: maxC,
-        config_json,
-        priority: prio,
-        scheduled_at: scheduled_at || new Date().toISOString(),
-      })
-      .select()
+    const artifacts = buildAgentTaskCreationArtifacts({
+      project_id: resolvedProjectId,
+      platform,
+      target_url,
+      task_type,
+      max_comments: maxC,
+      config_json,
+      priority: prio,
+      scheduled_at: scheduled_at || null,
+      now,
+    });
+
+    let collectionRunId: string | null = null;
+
+    const { data: runData, error: runError } = await supabase
+      .from('collection_runs')
+      .insert(artifacts.run)
+      .select('id')
       .single();
 
-    if (error) {
-      const msg = error.message.includes('task_queue')
+    if (!runError && runData?.id) {
+      collectionRunId = runData.id;
+
+      await supabase
+        .from('collection_run_events')
+        .insert({
+          collection_run_id: collectionRunId,
+          ...artifacts.event,
+        });
+    } else if (runError && !runError.message.includes('collection_runs')) {
+      console.warn('[Agent Tasks] Failed to create collection run:', runError.message);
+    }
+
+    const insertWithRunId = async () => {
+      return supabase
+        .from('task_queue')
+        .insert({
+          ...artifacts.taskPayload,
+          collection_run_id: collectionRunId,
+        })
+        .select()
+        .single();
+    };
+
+    const insertWithoutRunId = async () => {
+      return supabase
+        .from('task_queue')
+        .insert(artifacts.taskPayload)
+        .select()
+        .single();
+    };
+
+    let taskResult = await insertWithoutRunId();
+
+    if (collectionRunId) {
+      taskResult = await insertWithRunId();
+      if (taskResult.error && /collection_run_id/i.test(taskResult.error.message)) {
+        taskResult = await insertWithoutRunId();
+      }
+    }
+
+    if (taskResult.error) {
+      const msg = taskResult.error.message.includes('task_queue')
         ? '任务队列表尚未创建，请在 Supabase SQL Editor 中执行 005_create_task_queue.sql 迁移'
-        : error.message;
+        : taskResult.error.message;
       return NextResponse.json({ error: msg }, { status: 500 });
     }
 
-    return NextResponse.json({ task: data, success: true });
+    return NextResponse.json({ task: taskResult.data, success: true, collection_run_id: collectionRunId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `server error: ${msg}` }, { status: 500 });
@@ -152,11 +205,51 @@ export async function PATCH(request: NextRequest) {
         if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       }
     } else if (status === 'running') {
-      const { error } = await supabase
+      const now = new Date().toISOString();
+      const { data: taskRow, error } = await supabase
         .from('task_queue')
-        .update({ status: 'running', started_at: new Date().toISOString() })
-        .eq('id', task_id);
+        .update({ status: 'running', started_at: now })
+        .eq('id', task_id)
+        .select('id, collection_run_id')
+        .single();
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+      if (taskRow?.collection_run_id) {
+        const { data: runRow, error: runFetchError } = await supabase
+          .from('collection_runs')
+          .select('status, current_stage, failure_code, latest_error, latest_hint, received_count, imported_count, duplicate_count, filtered_count, failed_count, heartbeat_at, started_at, finished_at')
+          .eq('id', taskRow.collection_run_id)
+          .single();
+
+        if (!runFetchError && runRow) {
+          const runUpdate = markRunRunning(runRow as CollectionRunState, {
+            stage: 'claim',
+            now,
+          });
+
+          await supabase
+            .from('collection_runs')
+            .update({
+              ...runUpdate,
+              updated_at: now,
+            })
+            .eq('id', taskRow.collection_run_id);
+
+          await supabase
+            .from('collection_run_events')
+            .insert({
+              collection_run_id: taskRow.collection_run_id,
+              ...createRunEvent({
+                stage: 'claim',
+                level: 'info',
+                code: 'TASK_CLAIMED',
+                message: 'Agent claimed queued task',
+                details_json: { task_id },
+                now,
+              }),
+            });
+        }
+      }
     } else {
       return NextResponse.json({ error: `unsupported status: ${status}` }, { status: 400 });
     }
