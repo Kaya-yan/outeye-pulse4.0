@@ -4,7 +4,7 @@
 在不推翻现有采集链路的前提下，为 OutEye 建立统一的采集运行中枢（collection runs），让网页与终端围绕同一条运行状态流协作，实现状态透明、可诊断、可恢复的采集运维体验。
 
 ## 当前阶段
-阶段 2
+全部阶段已完成
 
 ## 各阶段
 
@@ -22,14 +22,14 @@
 - [x] 建立最小 failure hint 映射与 run event 构造逻辑
 - [x] 建立 queued run 与 running/claim 状态推进逻辑
 - [x] 为 phase 2 编写 schema 迁移（新表 + `collection_run_id` 挂接）
-- [ ] 继续收束统一的 run/event service（创建 run、追加 event、推进状态、汇总计数、heartbeat）
-- **状态：** in_progress
+- [x] 继续收束统一的 run/event service（创建 run、追加 event、推进状态、汇总计数、heartbeat）
+- **状态：** complete
 
 ### 阶段 3：接入 agent task path
-- [ ] 改造 `src/app/api/agent/tasks/route.ts`，创建任务时关联 run
-- [ ] 将 task status 更新映射为 run status / stage / event / heartbeat
-- [ ] 处理旧调用方未传 run 的兼容路径
-- **状态：** pending
+- [x] 改造 `src/app/api/agent/tasks/route.ts`，创建任务时关联 run
+- [x] 将 task status 更新映射为 run status / stage / event / heartbeat
+- [x] 处理旧调用方未传 run 的兼容路径
+- **状态：** complete
 
 ### 阶段 4：接入 agent callback import path
 - [x] 改造 `src/app/api/agent/data/route.ts`，回传时解析 run
@@ -45,28 +45,28 @@
 - **状态：** complete
 
 ### 阶段 6：接入 Bookmarklet intake / linking
-- [ ] 为 bookmarklet intake 增加 `collection_run_id` 归属能力
-- [ ] 改造 raw intake → link/import，使其贯通为单一 run
-- [ ] 保留旧 intake 流程的软兼容入口
-- **状态：** pending
+- [x] 为 bookmarklet intake 增加 `collection_run_id` 归属能力
+- [x] 改造 raw intake → link/import，使其贯通为单一 run
+- [x] 保留旧 intake 流程的软兼容入口
+- **状态：** complete
 
 ### 阶段 7：接入 keyword search path
-- [ ] 为 `search_tasks` 挂接 `collection_run_id`
-- [ ] 让 keyword search 产出 run timeline
-- [ ] 明确搜索 run 与后续采集 run 的关联策略
-- **状态：** pending
+- [x] 为 `search_tasks` 挂接 `collection_run_id`
+- [x] 让 keyword search 产出 run timeline
+- [x] 明确搜索 run 与后续采集 run 的关联策略
+- **状态：** complete
 
 ### 阶段 8：恢复动作与统一命令输出
-- [ ] 新增 retry / cancel / command regeneration 相关接口
-- [ ] 为不同 failure code 提供默认恢复动作
-- [ ] 明确 CLI/worker 需要遵守的 run reporting contract
-- **状态：** pending
+- [x] 新增 retry / cancel / command regeneration 相关接口
+- [x] 为不同 failure code 提供默认恢复动作
+- [x] 明确 CLI/worker 需要遵守的 run reporting contract
+- **状态：** complete
 
 ### 阶段 9：测试与验证
-- [ ] 为状态推进、failure hint、heartbeat stall detection 增加单测
-- [ ] 为 agent task / agent data / bookmarklet 路径增加集成验证
-- [ ] 记录 smoke test 与 UI 验证结果到 progress.md
-- **状态：** pending
+- [x] 为状态推进、failure hint、heartbeat stall detection 增加单测
+- [x] 为 agent task / agent data / bookmarklet 路径增加集成验证
+- [x] 记录 smoke test 与 UI 验证结果到 progress.md
+- **状态：** complete
 
 ## 关键问题
 1. `collection_run_id` 应如何在旧调用方未显式传入时被安全推导与补写。
@@ -95,6 +95,9 @@
 | 分析触发事件测试因缺少 `createAnalysisTriggerEvent` 导出而报 ESM import error | 1 | 先补最小导出 stub，让测试收敛到 analysis event 结构断言 |
 | collection runs 列表 helper 测试因缺少 `collection-runs-list.ts` 模块而报 `ERR_MODULE_NOT_FOUND` | 1 | 先创建最小 stub 模块，让测试收敛到 latest event 拼装断言 |
 | bookmarklet run helper 测试因缺少 `bookmarklet-run.ts` 模块而报 `ERR_MODULE_NOT_FOUND` | 1 | 先创建最小 stub 模块，让测试收敛到 run/event 结构断言 |
+| keyword search helper 测试因缺少 `search-run.ts` 模块而报 `ERR_MODULE_NOT_FOUND` | 1 | 先创建最小 stub 模块，让测试收敛到 search run 结构断言 |
+| retry helper 测试因缺少 `collection-run-retry.ts` 模块而报 `ERR_MODULE_NOT_FOUND` | 1 | 先创建最小 stub 模块，让测试收敛到 retry artifacts 结构断言 |
+| command helper 测试因缺少 `collection-run-command.ts` 模块而报 `ERR_MODULE_NOT_FOUND` | 1 | 先创建最小 stub 模块，让测试收敛到命令类型和内容断言 |
 | bookmarklet row attachment 测试因缺少 `attachCollectionRunIdToRawRows` 导出而报 ESM import error | 1 | 先补最小导出 stub，让测试收敛到 raw row 结构断言 |
 | bookmarklet linking 测试因缺少 `buildBookmarkletLinkLifecycleArtifacts` 导出而报 ESM import error | 1 | 先补最小导出 stub，让测试收敛到 linking lifecycle 断言 |
 

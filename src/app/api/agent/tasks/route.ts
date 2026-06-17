@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { attachCollectionRunIdToClaimedTask } from '@/lib/agent-task-claim';
 import { buildAgentTaskCreationArtifacts } from '@/lib/agent-task-run';
 import { createRunEvent, markRunRunning, type CollectionRunState } from '@/lib/collection-run-state';
 import { createServerClient } from '@/lib/supabase';
@@ -31,7 +32,16 @@ export async function GET(request: NextRequest) {
     if (!task || !task.id) {
       return NextResponse.json({ task: null, message: 'no pending tasks' });
     }
-    return NextResponse.json({ task });
+
+    const { data: taskRow } = await supabase
+      .from('task_queue')
+      .select('collection_run_id')
+      .eq('id', task.id)
+      .single();
+
+    return NextResponse.json({
+      task: attachCollectionRunIdToClaimedTask(task, taskRow?.collection_run_id || null),
+    });
   }
 
   // Mode 2: Query tasks by status (for UI)

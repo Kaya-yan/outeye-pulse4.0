@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
+import { shouldShowRetryAction } from '@/lib/collection-run-actions';
 import { getConsoleScript } from '@/lib/bookmarklet-code';
+import { detectRunStall } from '@/lib/collection-run-stall';
 import { generateDemoProject, computeDemoStats } from '@/lib/demo-data';
 import { fetchProjects, fetchPosts, fetchComments, createProject, createPost, fetchLocalLogs } from '@/lib/supabase-service';
 import { cn, formatNumber, formatPercent } from '@/lib/utils';
@@ -254,6 +256,7 @@ export default function P0Page() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [collectionRuns, setCollectionRuns] = useState<CollectionRunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [runActionLoading, setRunActionLoading] = useState<string | null>(null);
 
   const loadCollectionRuns = useCallback(async (projectId?: string | null) => {
     setRunsLoading(true);
@@ -335,6 +338,66 @@ export default function P0Page() {
       setToast({ type: 'error', message: '创建书签采集会话失败' });
     } finally {
       setBookmarkletPreparing(false);
+    }
+  };
+
+  const handleCopyRunCommand = async (runId: string) => {
+    setRunActionLoading(runId + ':command');
+    try {
+      const res = await fetch(`/api/collection/runs/${runId}/command`);
+      const data = await res.json();
+      if (data.error || !data.command?.command) {
+        setToast({ type: 'error', message: data.error || '获取命令失败' });
+        return;
+      }
+      copyText(data.command.command, `run-command-${runId}`);
+      setToast({ type: 'success', message: data.command.kind === 'console' ? '已复制 Console 脚本' : '已复制运行命令' });
+    } catch {
+      setToast({ type: 'error', message: '获取命令失败' });
+    } finally {
+      setRunActionLoading(null);
+    }
+  };
+
+  const handleCancelRun = async (runId: string) => {
+    setRunActionLoading(runId + ':cancel');
+    try {
+      const res = await fetch(`/api/collection/runs/${runId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'cancelled from P0 run panel' }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setToast({ type: 'error', message: data.error });
+        return;
+      }
+      setToast({ type: 'success', message: '已取消该运行' });
+      loadCollectionRuns(currentProject?.id);
+      loadAgentTasks();
+    } catch {
+      setToast({ type: 'error', message: '取消运行失败' });
+    } finally {
+      setRunActionLoading(null);
+    }
+  };
+
+  const handleRetryRun = async (runId: string) => {
+    setRunActionLoading(runId + ':retry');
+    try {
+      const res = await fetch(`/api/collection/runs/${runId}/retry`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        setToast({ type: 'error', message: data.error });
+        return;
+      }
+      setToast({ type: 'success', message: '已创建重试运行' });
+      loadCollectionRuns(currentProject?.id);
+      loadAgentTasks();
+    } catch {
+      setToast({ type: 'error', message: '创建重试运行失败' });
+    } finally {
+      setRunActionLoading(null);
     }
   };
 
@@ -766,7 +829,14 @@ export default function P0Page() {
           </div>
         ) : (
           <div className="space-y-3 max-h-[32rem] overflow-y-auto">
-            {collectionRuns.map(run => (
+            {collectionRuns.map(run => {
+              const stallInfo = detectRunStall({
+                status: run.status,
+                heartbeat_at: run.heartbeat_at,
+                now: new Date().toISOString(),
+              });
+
+              return (
               <div key={run.id} className="bg-[#030712] rounded-lg p-4 border border-[#1E293B]">
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -787,6 +857,11 @@ export default function P0Page() {
                     <span className="px-2 py-0.5 rounded text-xs bg-[#111827] text-[#64748B] border border-[#1E293B]">
                       {run.source}
                     </span>
+                    {stallInfo.stalled && (
+                      <span className="px-2 py-0.5 rounded text-xs bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20">
+                        可能卡住
+                      </span>
+                    )}
                   </div>
                   <span className="text-xs text-[#64748B] whitespace-nowrap">
                     {new Date(run.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -812,11 +887,28 @@ export default function P0Page() {
                   </div>
                 )}
 
+                <div className="flex items-center gap-2 mt-3 mb-2 flex-wrap">
+                  <button onClick={() => handleCopyRunCommand(run.id)} disabled={runActionLoading === run.id + ':command'} className="px-3 py-1.5 rounded text-xs bg-[#3B82F6]/10 text-[#60A5FA] border border-[#3B82F6]/20 hover:bg-[#3B82F6]/20 transition-colors disabled:opacity-50">
+                    {runActionLoading === run.id + ':command' ? '获取中...' : '复制命令'}
+                  </button>
+                  {shouldShowRetryAction(run.status) && (
+                    <button onClick={() => handleRetryRun(run.id)} disabled={runActionLoading === run.id + ':retry'} className="px-3 py-1.5 rounded text-xs bg-[#8B5CF6]/10 text-[#A78BFA] border border-[#8B5CF6]/20 hover:bg-[#8B5CF6]/20 transition-colors disabled:opacity-50">
+                      {runActionLoading === run.id + ':retry' ? '重试中...' : '重试运行'}
+                    </button>
+                  )}
+                  {!['completed', 'failed', 'cancelled'].includes(run.status) && (
+                    <button onClick={() => handleCancelRun(run.id)} disabled={runActionLoading === run.id + ':cancel'} className="px-3 py-1.5 rounded text-xs bg-[#EF4444]/10 text-[#F87171] border border-[#EF4444]/20 hover:bg-[#EF4444]/20 transition-colors disabled:opacity-50">
+                      {runActionLoading === run.id + ':cancel' ? '取消中...' : '取消运行'}
+                    </button>
+                  )}
+                </div>
+
                 {run.latest_hint && <p className="text-xs text-[#F59E0B]">建议：{run.latest_hint}</p>}
                 {!run.latest_hint && run.latest_error && <p className="text-xs text-[#EF4444]">错误：{run.latest_error}</p>}
+                {!run.latest_hint && stallInfo.stalled && <p className="text-xs text-[#F59E0B]">建议：运行超过阈值未更新，建议检查 Worker/采集器状态或直接重试。</p>}
                 {run.heartbeat_at && <p className="text-[11px] text-[#64748B] mt-1">心跳：{new Date(run.heartbeat_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>}
               </div>
-            ))}
+            );})}
           </div>
         )}
       </SectionCard>

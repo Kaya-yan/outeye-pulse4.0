@@ -8,6 +8,7 @@ import { cn, formatNumber } from '@/lib/utils';
 import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults, markSearchResultCollected } from '@/lib/supabase-service';
 import type { RawComment, SearchResult } from '@/lib/supabase-service';
 import { collectBilibiliComments, type CollectProgress } from '@/lib/collect-bilibili';
+import { buildSearchRunArtifacts, buildSearchRunCompletionArtifacts } from '@/lib/search-run';
 import { runAnalysis } from '@/lib/analysis-runner';
 
 // ─── Mode Tabs ─────────────────────────────────────────────────
@@ -98,17 +99,47 @@ function KeywordSearch() {
           setTotalNote(data.total_note || null);
           if (page === 1 && currentProject) {
             const { pubtimeBegin, pubtimeEnd } = getTimeRangeParams();
+            const totalViews = (data.results || []).reduce((s: number, r: { play: number }) => s + r.play, 0);
+            const totalLikes = (data.results || []).reduce((s: number, r: { likes: number }) => s + r.likes, 0);
+            const totalComments = (data.results || []).reduce((s: number, r: { review: number }) => s + r.review, 0);
+            let collectionRunId: string | null = null;
+            let baseRun: Record<string, unknown> | null = null;
+
+            try {
+              const { supabase } = await import('@/lib/supabase');
+              const now = new Date().toISOString();
+              const runArtifacts = buildSearchRunArtifacts({
+                project_id: currentProject.id,
+                platform: 'bilibili',
+                keyword: keyword.trim(),
+                now,
+              });
+              const { data: runData, error: runError } = await supabase
+                .from('collection_runs')
+                .insert(runArtifacts.run)
+                .select('id')
+                .single();
+              if (!runError && runData?.id) {
+                collectionRunId = runData.id;
+                baseRun = runArtifacts.run;
+                await supabase
+                  .from('collection_run_events')
+                  .insert({ collection_run_id: collectionRunId, ...runArtifacts.event });
+              }
+            } catch { /* ignore run creation errors */ }
+
             const task = await createSearchTask({
               project_id: currentProject.id,
+              collection_run_id: collectionRunId,
               platform: 'bilibili',
               keyword: keyword.trim(),
               time_range_start: pubtimeBegin ? new Date(pubtimeBegin * 1000).toISOString() : null,
               time_range_end: pubtimeEnd ? new Date(pubtimeEnd * 1000).toISOString() : null,
               status: 'completed',
               result_count: data.total,
-              total_views: (data.results || []).reduce((s: number, r: { play: number }) => s + r.play, 0),
-              total_likes: (data.results || []).reduce((s: number, r: { likes: number }) => s + r.likes, 0),
-              total_comments: (data.results || []).reduce((s: number, r: { review: number }) => s + r.review, 0),
+              total_views: totalViews,
+              total_likes: totalLikes,
+              total_comments: totalComments,
             });
             if (task) {
               setSearchTaskId(task.id);
@@ -130,6 +161,27 @@ function KeywordSearch() {
                 tags: r.tag,
                 published_at: new Date(r.pubdate * 1000).toISOString(),
               })));
+
+              if (collectionRunId && baseRun) {
+                try {
+                  const { supabase } = await import('@/lib/supabase');
+                  const now = new Date().toISOString();
+                  const completion = buildSearchRunCompletionArtifacts({
+                    run: baseRun,
+                    result_count: data.total,
+                    total_comments: totalComments,
+                    total_likes: totalLikes,
+                    now,
+                  });
+                  await supabase
+                    .from('collection_runs')
+                    .update({ ...completion.runUpdate, updated_at: now })
+                    .eq('id', collectionRunId);
+                  await supabase
+                    .from('collection_run_events')
+                    .insert({ collection_run_id: collectionRunId, ...completion.event });
+                } catch { /* ignore run completion errors */ }
+              }
             }
           }
         }
@@ -149,6 +201,87 @@ function KeywordSearch() {
           setXhsResults(data.results || []);
           setBiliResults([]);
           setTotal(data.total || 0);
+
+          if (page === 1 && currentProject) {
+            const totalLikes = Number(data.total_likes) || (data.results || []).reduce((s: number, r: { likes: number }) => s + (r.likes || 0), 0);
+            const totalComments = Number(data.total_comments) || (data.results || []).reduce((s: number, r: { comments_count: number }) => s + (r.comments_count || 0), 0);
+            let collectionRunId: string | null = null;
+            let baseRun: Record<string, unknown> | null = null;
+
+            try {
+              const { supabase } = await import('@/lib/supabase');
+              const now = new Date().toISOString();
+              const runArtifacts = buildSearchRunArtifacts({
+                project_id: currentProject.id,
+                platform: 'xhs',
+                keyword: keyword.trim(),
+                now,
+              });
+              const { data: runData, error: runError } = await supabase
+                .from('collection_runs')
+                .insert(runArtifacts.run)
+                .select('id')
+                .single();
+              if (!runError && runData?.id) {
+                collectionRunId = runData.id;
+                baseRun = runArtifacts.run;
+                await supabase
+                  .from('collection_run_events')
+                  .insert({ collection_run_id: collectionRunId, ...runArtifacts.event });
+              }
+            } catch { /* ignore run creation errors */ }
+
+            const task = await createSearchTask({
+              project_id: currentProject.id,
+              collection_run_id: collectionRunId,
+              platform: 'xhs',
+              keyword: keyword.trim(),
+              time_range_start: dateFrom ? new Date(dateFrom + '-01').toISOString() : null,
+              time_range_end: dateTo ? new Date(new Date(dateTo + '-01').getFullYear(), new Date(dateTo + '-01').getMonth() + 1, 0, 23, 59, 59).toISOString() : null,
+              status: 'completed',
+              result_count: data.total || (data.results || []).length,
+              total_views: Number(data.total_views) || 0,
+              total_likes: totalLikes,
+              total_comments: totalComments,
+            });
+            if (task) {
+              setSearchTaskId(task.id);
+              await insertSearchResults((data.results || []).map((r: typeof xhsResults[0]) => ({
+                search_task_id: task.id,
+                platform: 'xhs',
+                platform_id: (r.note_id || r.id) as string,
+                url: r.url,
+                title: r.title,
+                author: r.author,
+                views: r.views,
+                likes: r.likes,
+                comments_count: r.comments_count,
+                description: r.description,
+                cover_url: r.cover_url,
+              })));
+
+              if (collectionRunId && baseRun) {
+                try {
+                  const { supabase } = await import('@/lib/supabase');
+                  const now = new Date().toISOString();
+                  const completion = buildSearchRunCompletionArtifacts({
+                    run: baseRun,
+                    result_count: data.total || (data.results || []).length,
+                    total_comments: totalComments,
+                    total_likes: totalLikes,
+                    now,
+                  });
+                  await supabase
+                    .from('collection_runs')
+                    .update({ ...completion.runUpdate, updated_at: now })
+                    .eq('id', collectionRunId);
+                  await supabase
+                    .from('collection_run_events')
+                    .insert({ collection_run_id: collectionRunId, ...completion.event });
+                } catch { /* ignore run completion errors */ }
+              }
+            }
+          }
         }
       }
     } catch {
@@ -927,8 +1060,13 @@ function PendingRawComments() {
         }
       }
       if (postId) {
-        const count = await linkRawComments(sourceId, postId, currentProject.id);
-        if (count > 0) {
+        const res = await fetch('/api/raw-comments/link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceId, postId, projectId: currentProject.id }),
+        });
+        const data = await res.json();
+        if (!data.error && data.imported > 0) {
           const [p, c] = await Promise.all([fetchPosts(currentProject.id), fetchComments(currentProject.id)]);
           setPosts(p);
           setComments(c);

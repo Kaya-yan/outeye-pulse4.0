@@ -31,6 +31,30 @@
 - 现已新增 `GET /api/collection/runs` 读口，并用 `mergeRunsWithLatestEvents` 把 run 与最新事件拼成 P0 可直接消费的列表。
 - P0 已新增“采集运行中心”面板，并且实测位于“云端采集任务”之前；空态、刷新按钮和 run 列表渲染均正常。
 - 本机 Python 环境未安装 Playwright，因此本轮 UI 验证改用仓库自带的 Node Playwright 完成；页面无 page error，控制台只见 HMR/React DevTools 常规日志。
+- Bookmarklet 路径已完成三层接入：
+  - `createBookmarkletRunArtifacts` 用于创建 `awaiting_input` run
+  - `attachCollectionRunIdToRawRows` 用于把 `collection_run_id` 注入 raw rows
+  - `buildBookmarkletLinkLifecycleArtifacts` 用于 linking/import 完成后的 run 汇总与事件回写
+- `getConsoleScript(collectionRunId?)` 现已支持生成带 `collection_run_id` 的 Console 脚本；P0 新增“书签采集会话”按钮，会调用 `POST /api/collection/runs` 并复制脚本。
+- 当前真实环境里 `POST /api/collection/runs` 返回 500，原因是线上/远端 Supabase 还没执行 `013_create_collection_runs.sql`；我已经把报错文案收紧成可执行提示。
+- Keyword search 路径已补上 `buildSearchRunArtifacts` / `buildSearchRunCompletionArtifacts`，并接入 `collect/page.tsx` 的第一页搜索缓存逻辑：创建 `collection_runs`、给 `search_tasks` 写 `collection_run_id`、写入 completion event。
+- `collect` 页经浏览器 smoke test 确认可正常打开，关键词检索/精准采集模式都还在，未引入 page error。
+- phase 8 已新增：
+  - `POST /api/collection/runs/[id]/cancel`
+  - `POST /api/collection/runs/[id]/retry`
+  - `GET /api/collection/runs/[id]/command`
+- `buildRunCommand` 当前最小覆盖了两类恢复输出：
+  - agent direct_url → 本地 agent 轮询命令
+  - bookmarklet raw_intake → 带 `collection_run_id` 的 Console 命令片段
+- `GET /api/agent/tasks?agent_id=...` 现在会在 claimed task payload 中直接带上 `collection_run_id`，worker 契约已经闭环：任务领取 → 回传 data → run 汇总 / 事件回写。
+- P0 run 卡片现已接上“复制命令 / 取消运行 / 重试运行”按钮；其中复制命令、取消运行、重试运行都已经通过真实接口验证。
+- 真实验证中发现 bookmarklet linking 存在一个线上 bug：`linkRawComments()` 往 `comments` 插入了不存在的 `collected_by` 字段，导致 raw row 能显示但 run 不会前进。现在已通过 `buildBookmarkletCommentInsertRows` 修掉，并额外把 linking 改成服务端 API 路径，端到端验证已通过。
+- `mergeRunsWithLatestEvents()` 也修正了一个真实展示问题：同一时间戳下会优先选择更靠后的 stage（如 `finalize` 优先于 `import`），因此 run 卡片现在能稳定显示 `IMPORT_COMPLETED` 而不是卡在 `IMPORT_STARTED`。
+- 真实集成验证现已覆盖：
+  - bookmarklet run 创建 → Console 脚本带 `collection_run_id`
+  - bookmarklet raw row 导入 → `raw_comments.status=linked`、run=`completed`、`imported_count=1`、latest event=`IMPORT_COMPLETED`
+  - bookmarklet run 的 `cancel` / `retry` / `command` API
+  - stale run 在 P0 中显示“可能卡住”与建议文案
 - 结合 Supabase/Postgres 最佳实践与现有迁移风格，phase 2 迁移应采用：
   - `TEXT + CHECK` 而不是 Postgres enum，降低后续状态扩展成本
   - `JSONB` 事件明细字段，便于存结构化诊断上下文

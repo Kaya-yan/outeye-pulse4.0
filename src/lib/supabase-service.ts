@@ -1,3 +1,4 @@
+import { buildBookmarkletCommentInsertRows } from './bookmarklet-link-rows';
 import { buildBookmarkletLinkLifecycleArtifacts } from './bookmarklet-run';
 import { supabase } from './supabase';
 import type { Project, Post, Comment, AnalysisLog } from '@/types';
@@ -428,18 +429,13 @@ export async function linkRawComments(
 
   const existingRpid = new Set((existing || []).map(c => c.rpid).filter(Boolean));
 
-  const toInsert = raw
-    .filter(r => !r.rpid || !existingRpid.has(r.rpid))
-    .map(r => ({
-      post_id: postId,
-      project_id: projectId,
-      text: r.text,
-      likes: r.likes || 0,
-      sampling_tier: (r.likes || 0) >= 100 ? 'high' as const : (r.likes || 0) >= 10 ? 'mid' as const : 'low' as const,
-      is_sampled: (r.likes || 0) >= 100 || Math.random() < 0.5,
-      rpid: r.rpid || null,
-      collected_by: r.collected_by || 'bookmarklet',
-    }));
+  const toInsert = buildBookmarkletCommentInsertRows({
+    raw,
+    postId,
+    projectId,
+    existingRpid,
+    sampleRandom: Math.random(),
+  });
 
   if (toInsert.length === 0) {
     await supabase.from('raw_comments').update({ status: 'linked' }).eq('source_id', sourceId).eq('status', 'pending');
@@ -519,6 +515,7 @@ export async function insertRawComments(rows: RawComment[]): Promise<number> {
 export interface SearchTask {
   id: string;
   project_id: string | null;
+  collection_run_id?: string | null;
   platform: string;
   keyword: string;
   time_range_start: string | null;

@@ -41,3 +41,14 @@ test('merges runs with the latest event for each run', () => {
     },
   ]);
 });
+
+test('prefers the later event when timestamps are equal', () => {
+  const runs = [{ id: 'run-3', status: 'completed', current_stage: 'finalize', created_at: '2026-06-17T16:00:00.000Z' }];
+  const events = [
+    { collection_run_id: 'run-3', code: 'IMPORT_STARTED', message: 'started', created_at: '2026-06-17T16:10:00.000Z' },
+    { collection_run_id: 'run-3', code: 'IMPORT_COMPLETED', message: 'completed', created_at: '2026-06-17T16:10:00.000Z' },
+  ];
+
+  const merged = mergeRunsWithLatestEvents(runs, events);
+  assert.equal(merged[0].latest_event?.code, 'IMPORT_COMPLETED');
+});
