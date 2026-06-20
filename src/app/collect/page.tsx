@@ -7,7 +7,11 @@ import { useAppStore, useCurrentProject, usePosts, useComments } from '@/stores/
 import { cn, formatNumber } from '@/lib/utils';
 import { createProject, deletePost as deletePostApi, fetchPendingRawComments, linkRawComments, ignoreRawComments, createPost, fetchPosts, fetchComments, fetchProjects, createSearchTask, insertSearchResults, fetchSearchResults, markSearchResultCollected } from '@/lib/supabase-service';
 import type { RawComment, SearchResult } from '@/lib/supabase-service';
-import { collectBilibiliComments, type CollectProgress } from '@/lib/collect-bilibili';
+import { buildBilibiliCandidate, buildXhsCandidate, scoreCollectionCandidate } from '@/lib/collection-candidate';
+import { getCollectionNextAction } from '@/lib/collection-next-action';
+import { evaluateCollectionQuality } from '@/lib/collection-quality';
+import { collectBilibiliComments, type CollectProgress as BiliCollectProgress } from '@/lib/collect-bilibili';
+import { collectXhsComments, type XhsCollectProgress } from '@/lib/collect-xhs';
 import { buildSearchRunArtifacts, buildSearchRunCompletionArtifacts } from '@/lib/search-run';
 import { runAnalysis } from '@/lib/analysis-runner';
 
@@ -61,10 +65,13 @@ function KeywordSearch() {
   const [total, setTotal] = useState(0);
   const [totalNote, setTotalNote] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [recallSource, setRecallSource] = useState<string | null>(null);
   const [searchTaskId, setSearchTaskId] = useState<string | null>(null);
   const [collecting, setCollecting] = useState<string | null>(null);
   const [batchCollecting, setBatchCollecting] = useState(false);
   const [collectedIds, setCollectedIds] = useState<Set<string>>(new Set());
+  const [watchingId, setWatchingId] = useState<string | null>(null);
+  const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set());
 
   const getTimeRangeParams = (): { pubtimeBegin?: number; pubtimeEnd?: number } => {
     if (!dateFrom && !dateTo) return {};
@@ -95,6 +102,7 @@ function KeywordSearch() {
         } else {
           setBiliResults(data.results || []);
           setXhsResults([]);
+          setRecallSource('wbi-search');
           setTotal(data.total || 0);
           setTotalNote(data.total_note || null);
           if (page === 1 && currentProject) {
@@ -200,6 +208,7 @@ function KeywordSearch() {
         } else {
           setXhsResults(data.results || []);
           setBiliResults([]);
+          setRecallSource(data.source || 'cached');
           setTotal(data.total || 0);
 
           if (page === 1 && currentProject) {
@@ -331,6 +340,27 @@ function KeywordSearch() {
       }
     } catch { /* ignore */ }
     setCollecting(null);
+  };
+
+  const handleAddWatch = async (candidate: ReturnType<typeof buildBilibiliCandidate> | ReturnType<typeof buildXhsCandidate>) => {
+    setWatchingId(candidate.platformId);
+    try {
+      const res = await fetch('/api/collection/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: currentProject?.id || null, candidate }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setError(`加入观察失败: ${data.error}`);
+      } else {
+        setWatchedIds(prev => new Set(prev).add(candidate.platformId));
+      }
+    } catch {
+      setError('加入观察失败，请稍后重试');
+    } finally {
+      setWatchingId(null);
+    }
   };
 
   const handleBatchCollect = async () => {
@@ -495,6 +525,10 @@ function KeywordSearch() {
             ))}
           </div>
 
+          <div className="text-[10px] text-[var(--color-text-muted)] text-center">
+            召回来源：{recallSource || 'wbi-search'}
+          </div>
+
           {totalNote && (
             <div className="text-[10px] text-[var(--color-accent-amber)] text-center">
               {totalNote}（已自动过滤不相关结果）
@@ -522,7 +556,10 @@ function KeywordSearch() {
 
           {/* Video List */}
           <div className="space-y-2">
-            {biliResults.map((r, i) => (
+            {biliResults.map((r, i) => {
+              const candidate = buildBilibiliCandidate(r, recallSource || 'wbi-search');
+              const candidateScore = scoreCollectionCandidate(candidate, keyword.trim());
+              return (
               <div key={r.bvid} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors">
                 <div className="text-xs text-[var(--color-text-muted)] w-6 text-center flex-shrink-0">
                   {(currentPage - 1) * 20 + i + 1}
@@ -536,30 +573,48 @@ function KeywordSearch() {
                   />
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title}</div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title}</div>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)] border border-[var(--color-accent-blue)]/20">候选分 {candidateScore.total}</span>
+                  </div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3 flex-wrap">
                     <span>{r.author}</span>
                     <span>{formatNumber(r.play)}播放</span>
                     <span>{formatNumber(r.review)}评论</span>
                     <span>{r.duration}</span>
+                    <span>来源 {candidate.recallSource}</span>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleCollectVideo(r.bvid)}
-                  disabled={collecting === r.bvid || collectedIds.has(r.bvid)}
-                  className={cn(
-                    'px-3 py-1.5 rounded-lg text-[10px] flex-shrink-0 transition-all duration-200',
-                    collectedIds.has(r.bvid)
-                      ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
-                      : collecting === r.bvid
-                        ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)]'
-                        : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
-                  )}
-                >
-                  {collectedIds.has(r.bvid) ? '已采集' : collecting === r.bvid ? '采集中...' : '采集评论'}
-                </button>
+                <div className="flex flex-col gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleCollectVideo(r.bvid)}
+                    disabled={collecting === r.bvid || collectedIds.has(r.bvid)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-[10px] transition-all duration-200',
+                      collectedIds.has(r.bvid)
+                        ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
+                        : collecting === r.bvid
+                          ? 'bg-[var(--color-accent-blue)]/10 text-[var(--color-accent-blue)]'
+                          : 'bg-[var(--color-accent-blue)] text-white hover:brightness-110 active:scale-[0.98]'
+                    )}
+                  >
+                    {collectedIds.has(r.bvid) ? '已采集' : collecting === r.bvid ? '采集中...' : '采集评论'}
+                  </button>
+                  <button
+                    onClick={() => handleAddWatch(candidate)}
+                    disabled={watchingId === r.bvid || watchedIds.has(r.bvid)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-[10px] border transition-colors',
+                      watchedIds.has(r.bvid)
+                        ? 'bg-[var(--color-accent-purple)]/10 text-[var(--color-accent-purple)] border-[var(--color-accent-purple)]/20'
+                        : 'bg-[var(--color-bg-deep)] text-[var(--color-text-secondary)] border-[var(--color-border-subtle)] hover:border-[var(--color-accent-purple)]/30'
+                    )}
+                  >
+                    {watchedIds.has(r.bvid) ? '已加入观察' : watchingId === r.bvid ? '加入中...' : '加入观察'}
+                  </button>
+                </div>
               </div>
-            ))}
+            );})}
           </div>
 
           {/* Pagination */}
@@ -605,6 +660,10 @@ function KeywordSearch() {
             ))}
           </div>
 
+          <div className="text-[10px] text-[var(--color-text-muted)] text-center">
+            召回来源：{recallSource || 'cached'}
+          </div>
+
           {/* Batch Collect */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-[var(--color-text-muted)]">
@@ -626,7 +685,10 @@ function KeywordSearch() {
 
           {/* Note List */}
           <div className="space-y-2">
-            {xhsResults.map((r, i) => (
+            {xhsResults.map((r, i) => {
+              const candidate = buildXhsCandidate(r, recallSource || 'cached');
+              const candidateScore = scoreCollectionCandidate(candidate, keyword.trim());
+              return (
               <div key={r.note_id} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors">
                 <div className="text-xs text-[var(--color-text-muted)] w-6 text-center flex-shrink-0">
                   {(currentPage - 1) * 20 + i + 1}
@@ -640,30 +702,48 @@ function KeywordSearch() {
                   />
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title || '无标题'}</div>
-                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <div className="text-sm text-[var(--color-text-primary)] truncate">{r.title || '无标题'}</div>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#FE2C55]/10 text-[#FE2C55] border border-[#FE2C55]/20">候选分 {candidateScore.total}</span>
+                  </div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 flex items-center gap-3 flex-wrap">
                     <span>{r.author}</span>
                     <span>{formatNumber(r.views)}浏览</span>
                     <span>{formatNumber(r.comments_count)}评论</span>
                     <span>{formatNumber(r.likes)}赞</span>
+                    <span>来源 {candidate.recallSource}</span>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleCollectVideo(r.note_id)}
-                  disabled={collecting === r.note_id || collectedIds.has(r.note_id)}
-                  className={cn(
-                    'px-3 py-1.5 rounded-lg text-[10px] flex-shrink-0 transition-all duration-200',
-                    collectedIds.has(r.note_id)
-                      ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
-                      : collecting === r.note_id
-                        ? 'bg-[#FE2C55]/10 text-[#FE2C55]'
-                        : 'bg-[#FE2C55] text-white hover:brightness-110 active:scale-[0.98]'
-                  )}
-                >
-                  {collectedIds.has(r.note_id) ? '任务已创建' : collecting === r.note_id ? '创建中...' : '采集评论'}
-                </button>
+                <div className="flex flex-col gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleCollectVideo(r.note_id)}
+                    disabled={collecting === r.note_id || collectedIds.has(r.note_id)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-[10px] transition-all duration-200',
+                      collectedIds.has(r.note_id)
+                        ? 'bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]'
+                        : collecting === r.note_id
+                          ? 'bg-[#FE2C55]/10 text-[#FE2C55]'
+                          : 'bg-[#FE2C55] text-white hover:brightness-110 active:scale-[0.98]'
+                    )}
+                  >
+                    {collectedIds.has(r.note_id) ? '任务已创建' : collecting === r.note_id ? '创建中...' : '采集评论'}
+                  </button>
+                  <button
+                    onClick={() => handleAddWatch(candidate)}
+                    disabled={watchingId === r.note_id || watchedIds.has(r.note_id)}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-[10px] border transition-colors',
+                      watchedIds.has(r.note_id)
+                        ? 'bg-[var(--color-accent-purple)]/10 text-[var(--color-accent-purple)] border-[var(--color-accent-purple)]/20'
+                        : 'bg-[var(--color-bg-deep)] text-[var(--color-text-secondary)] border-[var(--color-border-subtle)] hover:border-[var(--color-accent-purple)]/30'
+                    )}
+                  >
+                    {watchedIds.has(r.note_id) ? '已加入观察' : watchingId === r.note_id ? '加入中...' : '加入观察'}
+                  </button>
+                </div>
               </div>
-            ))}
+            );})}
           </div>
 
           {/* Pagination */}
@@ -721,10 +801,21 @@ function triggerAnalysis(
 function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
   const [url, setUrl] = useState('');
   const [collecting, setCollecting] = useState(false);
-  const [progress, setProgress] = useState<CollectProgress | null>(null);
+  const [progress, setProgress] = useState<BiliCollectProgress | XhsCollectProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
-    imported: number; duplicates: number; video_title: string; post_id: string; analysisTriggered: boolean;
+    platform: 'bilibili' | 'xhs';
+    imported: number;
+    duplicates: number;
+    video_title: string;
+    post_id: string;
+    analysisTriggered: boolean;
+    metadataCompleteness?: 'high' | 'medium' | 'low';
+    coverageScore?: 'high' | 'medium' | 'low';
+    needBackfill?: boolean;
+    failed?: number;
+    filtered?: number;
+    queued?: boolean;
   } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const { setAnalysisProgress, currentProject } = useAppStore();
@@ -775,6 +866,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
             analysisTriggered = await triggerAnalysis(currentProject.id, collectResult.postId, setAnalysisProgress);
           }
           setResult({
+            platform: 'bilibili',
             imported: collectResult.imported,
             duplicates: collectResult.duplicates,
             video_title: collectResult.videoTitle,
@@ -785,19 +877,30 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           onCollected();
         }
       } else {
-        const res = await fetch('/api/agent/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ platform: 'xhs', target_url: url.trim(), max_comments: 5000 }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          setError(`创建任务失败: ${data.error}`);
+        const collectResult = await collectXhsComments(
+          { url: url.trim(), projectId: currentProject?.id, maxComments: 5000 },
+          setProgress,
+        );
+
+        if (collectResult.error) {
+          setError(collectResult.error);
         } else {
           setResult({
-            imported: 0, duplicates: 0, video_title: '小红书采集任务', post_id: '', analysisTriggered: false,
+            platform: 'xhs',
+            imported: collectResult.imported,
+            duplicates: collectResult.duplicates,
+            video_title: collectResult.noteTitle,
+            post_id: collectResult.postId,
+            analysisTriggered: collectResult.analysisTriggered ?? false,
+            metadataCompleteness: collectResult.metadataCompleteness,
+            coverageScore: collectResult.coverageScore,
+            needBackfill: collectResult.needBackfill,
+            failed: collectResult.failed,
+            filtered: collectResult.filtered,
+            queued: collectResult.queued,
           });
           setUrl('');
+          onCollected();
         }
       }
     } catch {
@@ -817,7 +920,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
           采集评论
         </h2>
         <p className="text-sm text-[var(--color-text-secondary)]">
-          粘贴 B站视频链接，一键采集所有评论并自动启动 AI 分析
+          粘贴 B站视频或小红书笔记链接，优先走产品内主链采集并自动进入分析工作流
         </p>
       </div>
 
@@ -828,7 +931,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
             value={url}
             onChange={e => { setUrl(e.target.value); setError(null); }}
             onKeyDown={e => e.key === 'Enter' && !collecting && url.trim() && handleCollect()}
-            placeholder="粘贴 B站链接，如 https://www.bilibili.com/video/BV1xx411c7mD"
+            placeholder="粘贴 B站或小红书链接，如 https://www.bilibili.com/video/BV1xx411c7mD 或 https://www.xiaohongshu.com/explore/xxxxxxxx"
             className="w-full bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] text-sm outline-none placeholder:text-[var(--color-text-muted)] font-mono px-4 py-3 rounded-lg border border-[var(--color-border-subtle)] focus:border-[var(--color-accent-blue)] transition-colors duration-200"
             disabled={collecting}
           />
@@ -889,10 +992,53 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
       )}
 
       {/* Result - persistent */}
-      {result && (
+      {result && (() => {
+        const nextAction = getCollectionNextAction({
+          platform: result.platform,
+          queued: result.queued,
+          needBackfill: result.needBackfill || false,
+          coverageScore: result.coverageScore,
+          metadataCompleteness: result.metadataCompleteness,
+        });
+        const quality = result.coverageScore && result.metadataCompleteness
+          ? evaluateCollectionQuality({
+              coverageScore: result.coverageScore,
+              metadataCompleteness: result.metadataCompleteness,
+              needBackfill: result.needBackfill || false,
+            })
+          : null;
+        return (
         <div className="mt-4 max-w-2xl mx-auto animate-fade-in-up">
           <div className="p-4 rounded-lg bg-[var(--color-accent-green)]/10 border border-[var(--color-accent-green)]/20">
-            {result.post_id ? (
+            {result.queued ? (
+              <>
+                <div className="text-sm text-[var(--color-accent-green)] mb-1">
+                  {result.video_title}
+                </div>
+                <div className="text-xs text-[var(--color-text-secondary)] mb-3">
+                  深采任务已创建，正在等待本地主引擎执行。当前结果已记录到运行面板，可稍后在 P0 查看进度。
+                </div>
+                <div className="text-[11px] text-[var(--color-text-muted)] mb-3 space-y-1">
+                  {quality && <div>研究等级：<span className="text-[var(--color-text-secondary)]">{quality.researchGrade}</span></div>}
+                  {result.metadataCompleteness && <div>元数据完整度：<span className="text-[var(--color-text-secondary)]">{result.metadataCompleteness}</span></div>}
+                  {result.coverageScore && <div>评论覆盖等级：<span className="text-[var(--color-text-secondary)]">{result.coverageScore}</span></div>}
+                  {quality && <div>{quality.explanation}</div>}
+                </div>
+                {nextAction && (
+                  <div className="flex gap-2">
+                    <Link href={nextAction.href} className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all">
+                      {nextAction.label}
+                    </Link>
+                    <button
+                      onClick={() => setResult(null)}
+                      className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors"
+                    >
+                      继续采集
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : result.post_id ? (
               <>
                 <div className="text-sm text-[var(--color-accent-green)] mb-1">
                   采集完成：{result.video_title}
@@ -900,18 +1046,34 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
                 <div className="text-xs text-[var(--color-text-secondary)] mb-3">
                   导入 {result.imported} 条评论
                   {result.duplicates > 0 && <span className="text-[var(--color-accent-amber)]">，跳过 {result.duplicates} 条重复</span>}
+                  {typeof result.filtered === 'number' && result.filtered > 0 && <span className="text-[var(--color-accent-amber)]">，过滤 {result.filtered} 条</span>}
+                  {typeof result.failed === 'number' && result.failed > 0 && <span className="text-[var(--color-accent-red)]">，失败 {result.failed} 条</span>}
                   {result.analysisTriggered
                     ? ' · AI 分析已自动启动'
                     : <span className="text-[var(--color-accent-amber)]"> · 自动分析启动失败，可手动前往分析台</span>
                   }
                 </div>
-                <div className="flex gap-2">
+                {(result.metadataCompleteness || result.coverageScore || quality) && (
+                  <div className="text-[11px] text-[var(--color-text-muted)] mb-3 space-y-1">
+                    {quality && <div>研究等级：<span className="text-[var(--color-text-secondary)]">{quality.researchGrade}</span></div>}
+                    {result.metadataCompleteness && <div>元数据完整度：<span className="text-[var(--color-text-secondary)]">{result.metadataCompleteness}</span></div>}
+                    {result.coverageScore && <div>评论覆盖等级：<span className="text-[var(--color-text-secondary)]">{result.coverageScore}</span></div>}
+                    {quality && <div>{quality.explanation}</div>}
+                    {result.needBackfill && <div className="text-[var(--color-accent-amber)]">建议：当前采集仍建议补录或重试以提升研究完整性</div>}
+                  </div>
+                )}
+                <div className="flex gap-2 flex-wrap">
                   <Link
                     href="/analyze"
                     className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all"
                   >
                     查看分析结果
                   </Link>
+                  {nextAction && (
+                    <Link href={nextAction.href} className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-amber)]/15 text-[var(--color-accent-amber)] border border-[var(--color-accent-amber)]/20 hover:bg-[var(--color-accent-amber)]/25 transition-colors">
+                      {nextAction.label}
+                    </Link>
+                  )}
                   <button
                     onClick={() => setResult(null)}
                     className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors"
@@ -932,7 +1094,7 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
             )}
           </div>
         </div>
-      )}
+        );})()}
     </div>
   );
 }

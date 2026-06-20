@@ -61,6 +61,24 @@
   - 对活跃状态使用 partial index（例如 `queued/running/importing/awaiting_input`）
   - 使用 `DO $$` 包裹外键约束与 policy 创建，保证幂等性
   - 保持与现有项目一致的宽松 RLS/policy，避免 phase 2 意外改变安全模型
+- collection-capability-enhancement Phase 1 的最小实现边界已经明确：
+  - 新增 `src/app/api/collect/xhs/route.ts`，角色上对齐 `src/app/api/collect/bilibili/route.ts`
+  - 新增 `src/lib/collect-xhs.ts`，角色上对齐 `src/lib/collect-bilibili.ts`
+  - 复用 `scripts/playwright-scraper/scrape-xhs.mjs` 的“API 拦截优先、DOM fallback 兜底”思路，但不要求直接把整份脚本照搬进前端
+  - 复用现有 `xhs-mcp` / `xhs-search` 作为 fallback 和搜索发现层，而不是让它们继续承担产品内主采职责
+  - `/collect` 的 Hero URL 入口当前对 XHS 只是创建 agent task（`src/app/collect/page.tsx:787`），Phase 1 的核心就是把这里补成产品内直采主链
+  - Phase 1 的结果输出至少要包含：主评论数、子评论数、过滤数、失败数、metadata completeness、是否建议补录
+- collection-capability-enhancement Phase 2 的最小实现边界已经落实：
+  - 新增 `src/lib/collection-candidate.ts` 统一 B站/XHS 搜索结果模型
+  - 候选分目前由 keyword relevance、comment potential、engagement、freshness 四项组成，先做最小版评分
+  - `/collect` 搜索页现在会显式展示“候选分”和“召回来源”，但不重构现有列表结构
+  - 当前仍保留原搜索缓存逻辑（`search_tasks` / `search_results`），候选池先做视图级产品化增强，而不是新建一套存储层
+- collection-capability-enhancement Phase 5 的最小 scaffold 已落实：
+  - 新增 `supabase/migrations/014_create_collection_watchlist.sql`
+  - 新增 `src/lib/collection-watchlist.ts` 与 watchlist helper 测试
+  - 新增 `POST /api/collection/watchlist`
+  - `/collect` 搜索结果卡片已接入“加入观察”按钮
+  - 当前真实写入 watchlist 仍需先执行 014 migration，但平台入口、数据模型和最小 API 通路已经齐备
 
 ## 技术决策
 | 决策 | 理由 |
@@ -70,6 +88,14 @@
 | 为 `raw_comments` / `task_queue` / `agent_data` / `search_tasks` 增加 `collection_run_id` | 用最小结构调整串联现有链路 |
 | P0 新增 run panel 作为主状态面板 | 先收状态透明，不先做大规模 UI 改造 |
 | failure code + hint 采用稳定机器码 | 让页面与终端共享诊断语义和恢复动作 |
+
+## 最终验证结果（2026-06-18）
+- `tsc --noEmit`：零错误
+- 53 项 TDD 测试：全部通过
+- 真实端到端验证覆盖：bookmarklet run 创建 → Console 脚本带 run ID → raw 导入 → run completed → cancel/retry/command API
+- P0 run panel：正常显示 run 列表、stall 检测、操作按钮
+- collect 页：XHS Hero URL 走产品内主链、搜索结果展示候选分与召回来源、研究等级与质量说明
+- 已知遗留：`014_create_collection_watchlist.sql` 待在 Supabase 执行
 
 ## 遇到的问题
 | 问题 | 解决方案 |

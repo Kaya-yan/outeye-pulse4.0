@@ -185,6 +185,30 @@
   - `findings.md`
   - `progress.md`
 
+### 阶段 10：XHS 深采主链（collection-capability-enhancement Phase 1）
+- **状态：** complete
+- 执行的操作：
+  - 新增 `src/lib/xhs-init.test.mjs` 与 `src/lib/xhs-init.ts`，先用 TDD 锁定 noteId 解析与 init payload/completeness 语义
+  - 新增 `src/app/api/collect/xhs/route.ts`，完成小红书初始化入口：URL 解析、项目归属、post 建/更新、最小 metadata completeness 输出
+  - 新增 `src/lib/collect-xhs.test.mjs` 与 `src/lib/collect-xhs-orchestrator.test.mjs`
+  - 实现 `src/lib/collect-xhs.ts`：定义 XHS collect summary、task request、terminal 判定，并新增 `collectXhsComments()` orchestrator
+  - 修复 `src/app/api/agent/data/route.ts`，让 agent 回传在未显式传 `project_id` 时回退到 run.project_id
+  - 将 `/collect` Hero URL 入口对 XHS 的处理从“只创建 agent task”切换为产品内主链：先 init，再建 task，再轮询 run，最后显示 queued/completed 结果
+  - 为 XHS 结果卡片补充 metadata completeness、coverage score 与 backfill 建议
+  - 用浏览器真实验证确认：XHS 链接会命中 `/api/collect/xhs`、`/api/agent/tasks` 与 run polling，不再只是静默创建任务
+- 创建/修改的文件：
+  - `src/lib/xhs-init.test.mjs`
+  - `src/lib/xhs-init.ts`
+  - `src/app/api/collect/xhs/route.ts`
+  - `src/lib/collect-xhs.test.mjs`
+  - `src/lib/collect-xhs-orchestrator.test.mjs`
+  - `src/lib/collect-xhs.ts`
+  - `src/app/api/agent/data/route.ts`
+  - `src/app/collect/page.tsx`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -241,6 +265,16 @@
 | 2026-06-17 | bookmarklet linking 真实链路卡在 `comments` 插入不存在的 `collected_by` 字段 | 1 | 用 `buildBookmarkletCommentInsertRows` 去掉该字段，并改走服务端 linking route |
 | 2026-06-17 | 同一时间戳下 latest event 可能停留在 `IMPORT_STARTED` 而不是 `IMPORT_COMPLETED` | 1 | 在 `mergeRunsWithLatestEvents()` 中加入 stage 优先级比较 |
 | 2026-06-17 | `npx tsc` 未调用到项目本地 TypeScript 编译器 | 1 | 改用 `node_modules/.bin/tsc` 做静态检查 |
+
+### 阶段 15：最终收口
+- **状态：** complete
+- 执行的操作：
+  - 确认全部 14 个阶段均已完成
+  - `tsc --noEmit` 零错误
+  - 53 项 TDD 测试全部通过
+  - 更新 `task_plan.md` 备注区，标记全部完成并记录遗留项
+  - 更新 `findings.md` 最终验证结果
+- 唯一遗留：在 Supabase 执行 `014_create_collection_watchlist.sql`
 
 ## 五问重启检查
 | 问题 | 答案 |

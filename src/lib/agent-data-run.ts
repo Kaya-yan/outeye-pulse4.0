@@ -11,6 +11,10 @@ export interface AgentImportLifecycleInput {
 const IMPORT_ZERO_INSERTED_HINT = '检查去重、帖子归属和原始数据是否为空';
 const ANALYSIS_TRIGGER_FAILED_HINT = '检查 /api/analysis 接口和项目配置';
 
+export function resolveImportProjectId(requestProjectId?: string | null, runProjectId?: string | null) {
+  return requestProjectId || runProjectId || null;
+}
+
 export function createAnalysisTriggerEvent(input: {
   projectId: string;
   imported: number;

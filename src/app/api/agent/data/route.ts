@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { buildAgentImportLifecycleArtifacts, createAnalysisTriggerEvent } from '@/lib/agent-data-run';
+import { buildAgentImportLifecycleArtifacts, createAnalysisTriggerEvent, resolveImportProjectId } from '@/lib/agent-data-run';
 import { createServerClient } from '@/lib/supabase';
 import { simpleHash, computeSampling, findExistingHashes, AD_PATTERN } from '@/lib/hash';
 
@@ -106,8 +106,10 @@ export async function POST(request: NextRequest) {
 
     const agentData = agentDataResult.data;
 
+    const effectiveProjectId = resolveImportProjectId(project_id, (currentRun?.project_id as string | null | undefined) ?? null);
+
     // Auto-import: batch insert into comments
-    const importResult = await importComments(raw_data, platform, project_id);
+    const importResult = await importComments(raw_data, platform, effectiveProjectId || undefined);
 
     if (collectionRunId && currentRun) {
       const now = new Date().toISOString();

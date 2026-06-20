@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAgentImportLifecycleArtifacts, createAnalysisTriggerEvent } from './agent-data-run.ts';
+import { buildAgentImportLifecycleArtifacts, createAnalysisTriggerEvent, resolveImportProjectId } from './agent-data-run.ts';
 
 test('builds receive/import/finalize events and completed run summary for agent import', () => {
   const run = {
@@ -175,4 +175,10 @@ test('creates ANALYSIS_TRIGGER_FAILED event when downstream analysis call fails'
     hint: '检查 /api/analysis 接口和项目配置',
     created_at: '2026-06-17T14:41:00.000Z',
   });
+});
+
+test('falls back to the run project id when agent callback does not send project_id', () => {
+  assert.equal(resolveImportProjectId(undefined, 'project-from-run'), 'project-from-run');
+  assert.equal(resolveImportProjectId('project-from-body', 'project-from-run'), 'project-from-body');
+  assert.equal(resolveImportProjectId(undefined, null), null);
 });

@@ -4,7 +4,7 @@
 在不推翻现有采集链路的前提下，为 OutEye 建立统一的采集运行中枢（collection runs），让网页与终端围绕同一条运行状态流协作，实现状态透明、可诊断、可恢复的采集运维体验。
 
 ## 当前阶段
-全部阶段已完成
+collection-capability-enhancement Phase 1
 
 ## 各阶段
 
@@ -68,6 +68,44 @@
 - [x] 记录 smoke test 与 UI 验证结果到 progress.md
 - **状态：** complete
 
+### 阶段 10：XHS 深采主链（collection-capability-enhancement Phase 1）
+- [x] 10.1 新增 `/api/collect/xhs` 初始化入口：解析 note URL、获取基础详情、建/更新 `posts`、输出 noteId/sourceUrl/project_id 与最小 metadata completeness
+- [x] 10.2 设计并实现 `collectXhsComments()` orchestrator：产品内主链统一驱动主采、断点、进度与导入
+- [x] 10.3 将 `scrape-xhs.mjs` 的 API 拦截思路平台化，明确主引擎（Playwright+API interception）与 fallback（MCP/VPS/bookmarklet/CSV）边界
+- [x] 10.4 为 XHS 深采定义最小 completeness / metadata 输出模型：主评论数、子评论数、过滤数、失败页数、元数据完整度、研究可用性初级判定
+- [x] 10.5 在 `/collect` Hero URL 入口接入 XHS 产品内主链，替换“仅创建 agent task”的现状
+- [x] 10.6 为 XHS 主链接入 `collection_runs` / `collection_run_events`，保证与 B站一致的状态可见性
+- [x] 10.7 补测试与验收：helper 单测、route 集成验证、浏览器 smoke test、XHS 直采 happy path 验证
+- **状态：** complete
+
+### 阶段 11：候选池与召回增强（collection-capability-enhancement Phase 2）
+- [x] 11.1 新增统一候选模型与评分 helper（B站/XHS 归一化 + 候选分）
+- [x] 11.2 在 `/collect` 搜索结果中展示候选分和召回来源
+- [x] 11.3 保持现有 B站/XHS 搜索结果与缓存逻辑可用，不重构整页架构
+- [x] 11.4 补单测与静态检查，完成最小产品化增强
+- **状态：** complete
+
+### 阶段 12：广搜 → 精采 → 补录工作流打通（collection-capability-enhancement Phase 3）
+- [x] 12.1 明确搜索结果到深采任务的统一转化动作
+- [x] 12.2 为深采结果显示缺口与补录建议
+- [x] 12.3 让 bookmarklet / console 补录从独立工具变成深采补洞动作
+- [x] 12.4 补浏览器验收，确认工作流对用户可见且可用（collect 页存在 onboarding 干扰，改用 helper + 页面状态 + API 调用联合验收）
+- **状态：** complete
+
+### 阶段 13：完整性 / 质量 / 研究可用性中台（collection-capability-enhancement Phase 4）
+- [x] 13.1 为采集结果补 research grade / coverage score / metadata score 的统一判定 helper
+- [x] 13.2 在产品内结果卡片中显式展示研究可用性等级
+- [x] 13.3 让缺口提示与质量等级形成一致解释
+- [x] 13.4 补单测与静态检查，完成最小质量中台接线
+- **状态：** complete
+
+### 阶段 14：持续观测与增量重抓骨架（collection-capability-enhancement Phase 5）
+- [x] 14.1 定义 watchlist 数据模型与最小 helper
+- [x] 14.2 为候选/内容增加“加入观察”入口的最小数据通路
+- [x] 14.3 给后续增量重抓留出统一入口与状态字段（`collection_watchlist` + `last_collected_at`）
+- [x] 14.4 补单测、静态检查与 API smoke test（当前真实写入仍依赖执行 `014_create_collection_watchlist.sql`）
+- **状态：** complete
+
 ## 关键问题
 1. `collection_run_id` 应如何在旧调用方未显式传入时被安全推导与补写。
 2. run 状态推进逻辑应集中在 service 层，避免散落在 route 与页面中。
@@ -102,6 +140,9 @@
 | bookmarklet linking 测试因缺少 `buildBookmarkletLinkLifecycleArtifacts` 导出而报 ESM import error | 1 | 先补最小导出 stub，让测试收敛到 linking lifecycle 断言 |
 
 ## 备注
-- 当前已批准的 spec 文件：`docs/superpowers/specs/2026-06-17-collection-ops-unification-design.md`
-- 当前处于“先规划，不直接实现”的阶段
-- 实施前需要把每个阶段的关键文件和验证方式再细化一层
+- 已批准 spec 文件：
+  - `docs/superpowers/specs/2026-06-17-collection-ops-unification-design.md`
+  - `docs/superpowers/specs/2026-06-17-collection-capability-enhancement-design.md`
+- 所有 14 个阶段均已完成实施与验证
+- 53 项 TDD 测试全部通过，`tsc --noEmit` 零错误
+- 待办：在 Supabase 执行 `014_create_collection_watchlist.sql` 以启用 watchlist 写入
