@@ -1,20 +1,44 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { computeDemoStats } from '@/lib/demo-data';
 import { cn, getDimensionLabel, getNarrativeLabel } from '@/lib/utils';
 import { exportToWord, exportToExcel, exportToCSV, prepareExportData } from '@/lib/export';
 import { welchTTest } from '@/lib/statistics';
+import { buildStatSample } from '@/lib/research-statistics-input';
+import { buildCredibilityProfile } from '@/lib/research-credibility';
+import { fetchProjects, fetchPosts, fetchComments, fetchProjectRuns } from '@/lib/supabase-service';
 
 export default function ReportPage() {
-  const { posts, comments, currentProject } = useAppStore();
+  const { posts, comments, currentProject, setProjects, setCurrentProject, setPosts, setComments } = useAppStore();
   const [reportType, setReportType] = useState<'weekly' | 'monthly' | 'event' | 'thesis_package'>('thesis_package');
   const [selectedDimensions, setSelectedDimensions] = useState<string[]>([
     'd1', 'd2_valence', 'd3', 'd5', 'narrative', 'risk'
   ]);
   const [generatedContent, setGeneratedContent] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Array<{ id: string; status: string; source: string; mode: string }>>([]);
+
+  useEffect(() => {
+    if (currentProject) {
+      fetchProjectRuns(currentProject.id).then(rs => setRuns(rs as Array<{ id: string; status: string; source: string; mode: string }>));
+      return;
+    }
+    (async () => {
+      const pj = await fetchProjects();
+      if (pj.length > 0) {
+        setProjects(pj);
+        setCurrentProject(pj[0]);
+        const [p, c] = await Promise.all([fetchPosts(pj[0].id), fetchComments(pj[0].id)]);
+        setPosts(p);
+        setComments(c);
+        const rs = await fetchProjectRuns(pj[0].id);
+        setRuns(rs as Array<{ id: string; status: string; source: string; mode: string }>);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.id]);
 
   const stats = useMemo(() => {
     if (posts.length === 0) return null;
@@ -35,11 +59,42 @@ export default function ReportPage() {
     if (aigcComments.length < 2 || humanComments.length < 2) return null;
     const dims = ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6'];
     return dims.map(dim => {
-      const s1 = aigcComments.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
-      const s2 = humanComments.map(c => Number((c.analysis as any)?.[dim]) || 0).filter(v => v !== 0);
-      return { dim, ...welchTTest(s1, s2) };
+      const s1 = buildStatSample(aigcComments as unknown as { analysis?: Record<string, unknown> | null }[], dim);
+      const s2 = buildStatSample(humanComments as unknown as { analysis?: Record<string, unknown> | null }[], dim);
+      return {
+        dim,
+        ...welchTTest(s1.values, s2.values),
+        aigcValid: s1.values.length,
+        aigcMissing: s1.missingCount,
+        humanValid: s2.values.length,
+        humanMissing: s2.missingCount,
+      };
     });
   }, [aigcComments, humanComments]);
+
+  const credibilityProfile = useMemo(() => {
+    if (!currentProject || posts.length === 0) return null;
+    const analyzedCount = analyzedComments.length;
+    const coverageScore = analyzedCount >= 50 ? 'high' : analyzedCount >= 20 ? 'medium' : 'low';
+    const metadataCompleteness = posts.every(p => p.title && (p.creator_name || p.author_name_mask)) ? 'high' : posts.some(p => p.title) ? 'medium' : 'low';
+    const needBackfill = coverageScore === 'low' || runs.some(r => r.status === 'failed' || r.status === 'partial_success');
+    const platform = (posts[0]?.platform === 'xhs' ? 'xhs' : 'bilibili') as 'bilibili' | 'xhs';
+    const statSamples: Record<string, { values: number[]; missingCount: number; filteredCount: number; zeroCount: number }> = {};
+    for (const dim of ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6']) {
+      const s = buildStatSample(analyzedComments as unknown as { analysis?: Record<string, unknown> | null }[], dim);
+      statSamples[dim] = { values: s.values, missingCount: s.missingCount, filteredCount: s.filteredCount, zeroCount: s.zeroCount };
+    }
+    return buildCredibilityProfile({
+      projectId: currentProject.id,
+      platform,
+      coverageScore,
+      metadataCompleteness,
+      needBackfill,
+      runs,
+      comments: comments as unknown as Array<{ id: string; platform?: string | null }>,
+      statSamples,
+    });
+  }, [currentProject, posts, analyzedComments, comments, runs]);
 
   const generateReport = () => {
     if (!stats || !currentProject) {
@@ -166,6 +221,41 @@ ${tTestResults ? `*样本量: AIGC 组 ${aigcComments.length} 条, 人工组 ${h
           一键生成结构化研究报告 · 直接服务论文写作
         </p>
       </div>
+
+      {credibilityProfile && (
+        <div className="glass-card p-5 animate-fade-in stagger-1">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">研究可信度档案</h3>
+            <span className="text-xs px-2 py-1 rounded-md bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)]">
+              等级 {credibilityProfile.researchGrade} · {credibilityProfile.gradeLabel}
+            </span>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)] mb-3">{credibilityProfile.gradeExplanation}</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <div className="text-[var(--color-text-muted)] mb-1">来源追溯</div>
+              <div className="text-[var(--color-text-secondary)]">
+                {credibilityProfile.traceCompleteness === 'full' ? '完整' : credibilityProfile.traceCompleteness === 'partial' ? '部分' : '缺失'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[var(--color-text-muted)] mb-1">采集运行</div>
+              <div className="text-[var(--color-text-secondary)]">{credibilityProfile.hasBackfill ? `含补录（${credibilityProfile.backfillSource}）` : '无补录'}</div>
+            </div>
+            <div>
+              <div className="text-[var(--color-text-muted)] mb-1">引用建议</div>
+              <div className="text-[var(--color-text-secondary)]">{credibilityProfile.citationAdvice}</div>
+            </div>
+            <div>
+              <div className="text-[var(--color-text-muted)] mb-1">下一步</div>
+              <div className="text-[var(--color-text-secondary)]">{credibilityProfile.nextActionHint}</div>
+            </div>
+          </div>
+          {credibilityProfile.riskHint && (
+            <div className="mt-3 text-xs text-[var(--color-accent-amber)]">⚠ {credibilityProfile.riskHint}</div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Config */}

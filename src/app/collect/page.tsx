@@ -10,6 +10,7 @@ import type { RawComment, SearchResult } from '@/lib/supabase-service';
 import { buildBilibiliCandidate, buildXhsCandidate, scoreCollectionCandidate } from '@/lib/collection-candidate';
 import { getCollectionNextAction } from '@/lib/collection-next-action';
 import { evaluateCollectionQuality } from '@/lib/collection-quality';
+import { getCredibilityCopy } from '@/lib/research-credibility-copy';
 import { collectBilibiliComments, type CollectProgress as BiliCollectProgress } from '@/lib/collect-bilibili';
 import { collectXhsComments, type XhsCollectProgress } from '@/lib/collect-xhs';
 import { buildSearchRunArtifacts, buildSearchRunCompletionArtifacts } from '@/lib/search-run';
@@ -1023,11 +1024,33 @@ function HeroUrlInput({ onCollected }: { onCollected: () => void }) {
                   {result.metadataCompleteness && <div>元数据完整度：<span className="text-[var(--color-text-secondary)]">{result.metadataCompleteness}</span></div>}
                   {result.coverageScore && <div>评论覆盖等级：<span className="text-[var(--color-text-secondary)]">{result.coverageScore}</span></div>}
                   {quality && <div>{quality.explanation}</div>}
+                  {quality && (
+                    <div className="text-[var(--color-accent-blue)]">
+                      {getCredibilityCopy({
+                        researchGrade: quality.researchGrade,
+                        traceCompleteness: 'full',
+                        hasFailedRuns: false,
+                      }).citationAdvice}
+                    </div>
+                  )}
                 </div>
                 {nextAction && (
                   <div className="flex gap-2">
                     <Link href={nextAction.href} className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all">
                       {nextAction.label}
+                    </Link>
+                    <button
+                      onClick={() => setResult(null)}
+                      className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)] transition-colors"
+                    >
+                      继续采集
+                    </button>
+                  </div>
+                )}
+                {!nextAction && (
+                  <div className="flex gap-2">
+                    <Link href="/p0" className="px-3 py-1.5 rounded-lg text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all">
+                      立即查看运行
                     </Link>
                     <button
                       onClick={() => setResult(null)}

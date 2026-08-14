@@ -317,11 +317,11 @@ export async function GET(request: NextRequest) {
 // ─── AI helpers ────────────────────────────────────────────────
 
 async function analyzeBatch(batch: { id: string; text: string }[], videoContext?: string): Promise<{ processed: number; tokens: number; succeededIds: string[] }> {
-  const mimoApiKey = process.env.MIMO_API_KEY;
-  const mimoApiUrl = process.env.MIMO_API_URL || 'https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages';
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiUrl = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
 
-  if (!mimoApiKey) {
-    throw new Error('MIMO_API_KEY not configured');
+  if (!apiKey) {
+    throw new Error('DEEPSEEK_API_KEY not configured');
   }
 
   // Deduplicate by text — AI returns one result per unique text
@@ -345,33 +345,30 @@ async function analyzeBatch(batch: { id: string; text: string }[], videoContext?
     .map((text, i) => `【${i + 1}】${text}`)
     .join('\n');
 
-  const response = await fetch(mimoApiUrl, {
+  const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${mimoApiKey}`,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'mimo-v2.5-pro',
+      model: 'deepseek-chat',
       max_tokens: Math.max(4000, uniqueTexts.length * 300),
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userContent }],
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userContent },
+      ],
     }),
   });
 
   if (!response.ok) {
     const errBody = await response.text();
-    throw new Error(`MiMo API ${response.status}: ${errBody.slice(0, 200)}`);
+    throw new Error(`DeepSeek API ${response.status}: ${errBody.slice(0, 200)}`);
   }
 
   const result = await response.json();
 
-  let analysisText = '';
-  if (Array.isArray(result.content)) {
-    const textBlock = result.content.find((b: { type: string }) => b.type === 'text');
-    analysisText = textBlock?.text || '';
-  }
+  const analysisText = result.choices?.[0]?.message?.content || '';
 
   if (!analysisText) {
     throw new Error('Empty AI response');
@@ -395,7 +392,7 @@ async function analyzeBatch(batch: { id: string; text: string }[], videoContext?
     const validated = validateAnalysis(analysisArray[i]);
     const analysisPayload = {
       ...validated,
-      model_version: 'mimo-v2.5-pro',
+      model_version: 'deepseek-chat',
       analyzed_at: new Date().toISOString(),
     };
 

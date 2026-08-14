@@ -79,16 +79,17 @@ Deno.serve(async (req) => {
       .map((c, i) => `【${i + 1}】${c.text}`)
       .join('\n');
 
-    // Call MiMo API
-    const mimoApiKey = Deno.env.get('MIMO_API_KEY');
-    const response = await fetch('https://api.mimo.com/v1/chat/completions', {
+    // Call DeepSeek API
+    const deepseekApiKey = Deno.env.get('DEEPSEEK_API_KEY');
+    const deepseekApiUrl = Deno.env.get('DEEPSEEK_API_URL') || 'https://api.deepseek.com/v1/chat/completions';
+    const response = await fetch(deepseekApiUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${mimoApiKey}`,
+        'Authorization': `Bearer ${deepseekApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'mimo-v2.5-pro',
+        model: 'deepseek-chat',
         max_tokens: 4000,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT + '\n\n' + FEW_SHOT_EXAMPLES },
@@ -99,7 +100,7 @@ Deno.serve(async (req) => {
 
     if (!response.ok) {
       return new Response(
-        JSON.stringify({ error: 'MiMo API call failed', status: response.status }),
+        JSON.stringify({ error: 'DeepSeek API call failed', status: response.status }),
         { status: 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -128,7 +129,7 @@ Deno.serve(async (req) => {
           .update({
             analysis: {
               ...analysisArray[i],
-              model_version: 'mimo-v2.5-pro',
+              model_version: 'deepseek-chat',
               analyzed_at: new Date().toISOString(),
             },
           })

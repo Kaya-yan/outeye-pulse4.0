@@ -47,7 +47,7 @@ function generateAnalysisResult(isAigc: boolean): AnalysisResult {
       { word: randomChoice(GUO_YONGHUAI_KEYWORDS), weight: randomFloat(0.2, 0.5), dimension: 'd3' },
       { word: randomChoice([...GUO_YONGHUAI_KEYWORDS, ...AIGC_KEYWORDS]), weight: randomFloat(0.1, 0.4), dimension: 'd1' },
     ],
-    model_version: 'mimo-v2.5-pro',
+    model_version: 'deepseek-chat',
   };
 }
 

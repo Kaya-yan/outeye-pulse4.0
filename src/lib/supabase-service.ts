@@ -611,3 +611,32 @@ export async function markSearchResultCollected(resultId: string, postId: string
     .eq('id', resultId);
   return !error;
 }
+
+export interface CollectionRunRow {
+  id: string;
+  project_id: string | null;
+  platform: string | null;
+  source: string;
+  mode: string;
+  status: string;
+  current_stage: string | null;
+  failure_code: string | null;
+  received_count: number;
+  imported_count: number;
+  duplicate_count: number;
+  filtered_count: number;
+  failed_count: number;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export async function fetchProjectRuns(projectId: string): Promise<CollectionRunRow[]> {
+  const { data, error } = await supabase
+    .from('collection_runs')
+    .select('id, project_id, platform, source, mode, status, current_stage, failure_code, received_count, imported_count, duplicate_count, filtered_count, failed_count, heartbeat_at, started_at, finished_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
+  if (error) return [];
+  return (data || []) as CollectionRunRow[];
+}

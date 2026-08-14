@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
 import { cn, formatNumber, getNarrativeLabel, getDimensionLabel, getDimensionPlainLabel, getChartInterpretation, NARRATIVE_COLORS } from '@/lib/utils';
+import { buildCredibilityProfile } from '@/lib/research-credibility';
+import { buildStatSample } from '@/lib/research-statistics-input';
 import dynamic from 'next/dynamic';
 
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -85,9 +87,10 @@ function generateFindings(posts: any[], comments: any[], analyzed: any[], isPlai
 }
 
 // ─── Overview Tab ───────────────────────────────────────────────
-function OverviewTab({ posts, comments, analyzed, isPlain, isAnalyzing, onStartAnalysis, analysisTriggering }: {
+function OverviewTab({ posts, comments, analyzed, isPlain, isAnalyzing, onStartAnalysis, analysisTriggering, credibilityProfile }: {
   posts: any[]; comments: any[]; analyzed: any[]; isPlain: boolean;
   isAnalyzing: boolean; onStartAnalysis: () => void; analysisTriggering: boolean;
+  credibilityProfile: ReturnType<typeof buildCredibilityProfile> | null;
 }) {
   const findings = useMemo(() => generateFindings(posts, comments, analyzed, isPlain), [posts, comments, analyzed, isPlain]);
 
@@ -110,6 +113,28 @@ function OverviewTab({ posts, comments, analyzed, isPlain, isAnalyzing, onStartA
           </div>
         ))}
       </div>
+
+      {/* Credibility boundary */}
+      {credibilityProfile && (
+        <div className="glass-card p-4 animate-fade-in stagger-5">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-semibold text-[var(--color-text-primary)]">{isPlain ? '数据靠谱吗' : '结论边界'}</span>
+            <span className="text-xs px-2 py-0.5 rounded-md bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)]">
+              等级 {credibilityProfile.researchGrade}
+            </span>
+            <span className="text-xs text-[var(--color-text-muted)]">{credibilityProfile.gradeLabel}</span>
+            <span className="text-xs text-[var(--color-text-secondary)]">· {credibilityProfile.citationAdvice}</span>
+            {credibilityProfile.riskHint && (
+              <span className="text-xs text-[var(--color-accent-amber)]">⚠ {credibilityProfile.riskHint}</span>
+            )}
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-2">
+            {isPlain
+              ? `已分析 ${analyzed.length} 条（共 ${comments.length} 条评论）· ${credibilityProfile.traceCompleteness === 'full' ? '来源齐全' : credibilityProfile.traceCompleteness === 'partial' ? '来源不全' : '来源缺失'}`
+              : `有效样本 ${analyzed.length} 条 / 总评论 ${comments.length} 条 · 来源追溯 ${credibilityProfile.traceCompleteness === 'full' ? '完整' : credibilityProfile.traceCompleteness === 'partial' ? '部分' : '缺失'}`}
+          </p>
+        </div>
+      )}
 
       {/* Findings */}
       {findings.length > 0 && (
@@ -918,21 +943,47 @@ export default function AnalyzePage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [analysisTriggering, setAnalysisTriggering] = useState(false);
+  const [runs, setRuns] = useState<Array<{ id: string; status: string; source: string; mode: string }>>([]);
   const isPlain = terminologyMode === 'plain';
   const getDimLabel = isPlain ? getDimensionPlainLabel : getDimensionLabel;
 
   const analyzedComments = useMemo(() => comments.filter(c => c.analysis), [comments]);
 
+  const credibilityProfile = useMemo(() => {
+    if (!currentProject || posts.length === 0) return null;
+    const analyzedCount = analyzedComments.length;
+    const coverageScore = analyzedCount >= 50 ? 'high' : analyzedCount >= 20 ? 'medium' : 'low';
+    const metadataCompleteness = posts.every(p => p.title && (p.creator_name || p.author_name_mask)) ? 'high' : posts.some(p => p.title) ? 'medium' : 'low';
+    const needBackfill = coverageScore === 'low' || runs.some(r => r.status === 'failed' || r.status === 'partial_success');
+    const platform = (posts[0]?.platform === 'xhs' ? 'xhs' : 'bilibili') as 'bilibili' | 'xhs';
+    const statSamples: Record<string, { values: number[]; missingCount: number; filteredCount: number; zeroCount: number }> = {};
+    for (const dim of ['d1', 'd2_valence', 'd2_arousal', 'd3', 'd4', 'd5', 'd6']) {
+      const s = buildStatSample(analyzedComments as unknown as { analysis?: Record<string, unknown> | null }[], dim);
+      statSamples[dim] = { values: s.values, missingCount: s.missingCount, filteredCount: s.filteredCount, zeroCount: s.zeroCount };
+    }
+    return buildCredibilityProfile({
+      projectId: currentProject.id,
+      platform,
+      coverageScore,
+      metadataCompleteness,
+      needBackfill,
+      runs,
+      comments: comments as unknown as Array<{ id: string; platform?: string | null }>,
+      statSamples,
+    });
+  }, [currentProject, posts, analyzedComments, comments, runs]);
+
   const loadData = useCallback(async () => {
     try {
-      const { fetchProjects, fetchPosts, fetchComments } = await import('@/lib/supabase-service');
+      const { fetchProjects, fetchPosts, fetchComments, fetchProjectRuns } = await import('@/lib/supabase-service');
       const projects = await fetchProjects();
       if (projects.length > 0) {
         setProjects(projects);
         setCurrentProject(projects[0]);
-        const [p, c] = await Promise.all([fetchPosts(projects[0].id), fetchComments(projects[0].id)]);
+        const [p, c, rs] = await Promise.all([fetchPosts(projects[0].id), fetchComments(projects[0].id), fetchProjectRuns(projects[0].id)]);
         setPosts(p);
         setComments(c);
+        setRuns(rs as Array<{ id: string; status: string; source: string; mode: string }>);
       }
       setLoadError(null);
     } catch {
@@ -999,17 +1050,27 @@ export default function AnalyzePage() {
             {posts.length} 篇内容 · {comments.length} 条评论 · {analyzedComments.length} 已分析
           </p>
         </div>
-        <button
-          onClick={() => setTerminologyMode(isPlain ? 'academic' : 'plain')}
-          className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all duration-200',
-            isPlain
-              ? 'bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)] border border-[var(--color-accent-amber)]/20'
-              : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)]'
+        <div className="flex items-center gap-2">
+          {analyzedComments.length > 0 && (
+            <Link
+              href="/report"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-[var(--color-accent-blue)] text-white hover:brightness-110 transition-all"
+            >
+              生成报告
+            </Link>
+          )}
+          <button
+            onClick={() => setTerminologyMode(isPlain ? 'academic' : 'plain')}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-all duration-200',
+              isPlain
+                ? 'bg-[var(--color-accent-amber)]/10 text-[var(--color-accent-amber)] border border-[var(--color-accent-amber)]/20'
+                : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border-active)]'
           )}
         >
           {isPlain ? '通俗模式' : '学术模式'}
-        </button>
+          </button>
+        </div>
       </div>
 
       {/* Tab Bar */}
@@ -1033,7 +1094,7 @@ export default function AnalyzePage() {
 
       {/* Tab Content */}
       <div className="animate-fade-in">
-        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={analysisProgress?.status === 'processing'} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} />}
+        {activeTab === 'overview' && <OverviewTab posts={posts} comments={comments} analyzed={analyzedComments} isPlain={isPlain} isAnalyzing={analysisProgress?.status === 'processing'} onStartAnalysis={handleStartAnalysis} analysisTriggering={analysisTriggering} credibilityProfile={credibilityProfile} />}
         {activeTab === 'emotion' && <EmotionTab analyzed={analyzedComments} isPlain={isPlain} />}
         {activeTab === 'narrative' && <NarrativeTab analyzed={analyzedComments} posts={posts} isPlain={isPlain} />}
         {activeTab === 'risk' && <NarrativeRiskTab analyzed={analyzedComments} />}

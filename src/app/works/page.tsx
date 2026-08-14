@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/stores/useAppStore';
-import { updatePost, createPost } from '@/lib/supabase-service';
+import { updatePost, createPost, fetchProjects, fetchPosts, fetchComments } from '@/lib/supabase-service';
 import { cn, formatNumber, getDimensionLabel, getRiskLabel, getRiskColor } from '@/lib/utils';
 import type { Post, AigcType } from '@/types';
 import { AIGC_TYPE_LABELS } from '@/types';
@@ -21,10 +21,29 @@ const PLATFORM_COLORS: Record<string, string> = {
 };
 
 export default function WorksPage() {
-  const { currentProject, posts, comments, setPosts, addPost } = useAppStore();
+  const { currentProject, posts, comments, setPosts, addPost, setProjects, setCurrentProject, setComments } = useAppStore();
   const [editingPost, setEditingPost] = useState<Post | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
+
+  useEffect(() => {
+    if (currentProject && posts.length > 0) return;
+    (async () => {
+      try {
+        const pj = await fetchProjects();
+        if (pj.length > 0) {
+          setProjects(pj);
+          if (!currentProject) setCurrentProject(pj[0]);
+          const [p, c] = await Promise.all([fetchPosts(pj[0].id), fetchComments(pj[0].id)]);
+          setPosts(p);
+          setComments(c);
+        }
+      } catch {
+        // 冷启动失败时静默，页面会显示空态
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.id]);
 
   const projectPosts = useMemo(() => {
     if (!currentProject) return [];

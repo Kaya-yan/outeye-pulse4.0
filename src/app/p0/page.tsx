@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import Link from 'next/link';
 import { useAppStore } from '@/stores/useAppStore';
 import { shouldShowRetryAction } from '@/lib/collection-run-actions';
 import { getConsoleScript } from '@/lib/bookmarklet-code';
@@ -900,6 +901,11 @@ export default function P0Page() {
                     <button onClick={() => handleCancelRun(run.id)} disabled={runActionLoading === run.id + ':cancel'} className="px-3 py-1.5 rounded text-xs bg-[#EF4444]/10 text-[#F87171] border border-[#EF4444]/20 hover:bg-[#EF4444]/20 transition-colors disabled:opacity-50">
                       {runActionLoading === run.id + ':cancel' ? '取消中...' : '取消运行'}
                     </button>
+                  )}
+                  {run.status === 'completed' && (
+                    <Link href="/analyze" className="px-3 py-1.5 rounded text-xs bg-[#10B981]/10 text-[#34D399] border border-[#10B981]/20 hover:bg-[#10B981]/20 transition-colors">
+                      跳转分析
+                    </Link>
                   )}
                 </div>
 

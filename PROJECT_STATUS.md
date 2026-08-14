@@ -1,6 +1,6 @@
 # OutEye Pulse 项目现状报告
 
-> 更新日期：2026-06-12
+> 更新日期：2026-07-18
 
 ---
 
@@ -30,7 +30,7 @@ OutEye Pulse 是一个**文化记忆研究的多平台评论采集与 AI 智能�
 | UI | React + Tailwind CSS | 4 |
 | 状态管理 | Zustand (persist middleware) | — |
 | 数据库 | Supabase (PostgreSQL + PostgREST) | — |
-| AI 模型 | MiMo v2.5 Pro (Anthropic 协议) | — |
+| AI 模型 | DeepSeek (deepseek-chat, OpenAI 兼容协议) | — |
 | 图表 | ECharts | — |
 | 部署 | Vercel (推测) | — |
 
@@ -247,15 +247,43 @@ npm run build
 # 环境变量（.env.local）
 NEXT_PUBLIC_SUPABASE_URL=xxx
 NEXT_PUBLIC_SUPABASE_ANON_KEY=xxx
-MIMO_API_KEY=xxx
-MIMO_API_URL=https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages
+SUPABASE_SERVICE_ROLE_KEY=xxx
+DEEPSEEK_API_KEY=xxx
 ```
 
 ### 关键配置
 - Supabase 项目需运行 `supabase/schema.sql` 和 `supabase/migrations/` 下的迁移文件
-- MiMo API 密钥需单独申请
+- DeepSeek API 密钥需在平台申请（OpenAI 兼容协议）
 - B站采集无需登录（WBI 签名在服务端完成）
 - 小红书采集需要 VPS 环境部署 Playwright
+
+## 七、采集运维体系（collection runs）
+
+项目已建立统一的采集运行中枢，覆盖所有采集入口：
+
+- `collection_runs` 表：记录每次采集运行的生命周期（queued / running / importing / awaiting_input / completed / partial_success / failed / cancelled）
+- `collection_run_events` 表：结构化事件日志（TASK_ENQUEUED / TASK_CLAIMED / RAW_RECEIVED / IMPORT_STARTED / IMPORT_COMPLETED 等）
+- `raw_comments` / `task_queue` / `agent_data` / `search_tasks` 均已挂接 `collection_run_id`
+- P0 页面提供运行中心：监控、取消、重试、命令生成、stall 检测
+- 支持 bookmarklet 补录、agent 回传、关键词搜索三条入口的统一追踪
+
+## 八、研究可信度体系（research credibility）
+
+项目已建立跨链路的研究可信度档案（credibility profile）：
+
+- `src/lib/research-credibility.ts`：统一生成项目级可信度档案
+- `src/lib/research-trace.ts`：结果溯源（run / source / backfill / trace completeness）
+- `src/lib/research-statistics-input.ts`：统计输入构造（区分 null / 0 / filtered）
+- `src/lib/research-credibility-copy.ts`：可信度说明文案映射
+- `collect / analyze / report` 三个页面共享同一套可信度语言
+- report 页统计口径已修复：不再用 `|| 0` + `.filter(v => v !== 0)` 混淆缺失值与合法 0 值
+
+## 九、测试现状
+
+- 使用 Node 原生测试运行器（`node --experimental-strip-types --test`）
+- 测试文件为 `.mjs`，生产代码为 `.ts`
+- 当前 74 项 TDD 测试全部通过
+- 覆盖：run state、agent task、agent data、bookmarklet、search、retry、command、stall、watchlist、research-credibility、research-trace、research-statistics-input、research-credibility-copy
 
 ---
 
@@ -294,7 +322,7 @@ MIMO_API_URL=https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages
 └───────────────────────────────────────────────────────┘
          │                                    │
     ┌────┴────┐                         ┌─────┴─────┐
-    │ Bilibili│                         │ MiMo API  │
+    │ Bilibili│                         │ DeepSeek  │
     │ XHS API │                         │ (AI分析)  │
     └─────────┘                         └───────────┘
 ```

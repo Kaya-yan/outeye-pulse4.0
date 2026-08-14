@@ -2,7 +2,13 @@ export function evaluateCollectionQuality(input: {
   coverageScore: 'high' | 'medium' | 'low';
   metadataCompleteness: 'high' | 'medium' | 'low';
   needBackfill: boolean;
-}) {
+}): {
+  researchGrade: 'A' | 'B' | 'C';
+  coverageScore: 'high' | 'medium' | 'low';
+  metadataScore: 'high' | 'medium' | 'low';
+  needBackfill: boolean;
+  explanation: string;
+} {
   if (input.coverageScore === 'high' && input.metadataCompleteness === 'high' && !input.needBackfill) {
     return {
       researchGrade: 'A',
